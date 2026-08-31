@@ -1,10 +1,15 @@
-# <Project Name> Agent Guide
+# v9fs Agent Team Guide
 
 ## Mission
 
-<State one observable project outcome and the authoritative evidence source.>
+Land proof-carrying v9fs kernel and harness slices — issue fixes and later
+feature work — that may change `v9fs/linux`, `v9fs/test`, or both. Linux stays
+a rebase-clean mainline mirror with no CI surface. Regression evidence comes
+from the test harness (Actions, wiki table, JSON/diff artifacts). Authoritative
+evidence begins at `v9fs/linux` and `v9fs/test` (commits, issues, and Actions
+artifacts).
 
-GitHub repository: `<owner/repo>`.
+GitHub repository: `v9fs/agent-team`.
 
 ## Agent Fast Path
 
@@ -37,6 +42,8 @@ Human approval is required for:
 - merging unless the project formulation explicitly grants `A3`;
 - releases, deployments, production writes, or external communication;
 - destructive history changes, secret handling, or materially wider scope.
+- merging patches into `v9fs/linux`;
+- writing `.github` or any non-upstream file into `v9fs/linux`.
 
 A request to finish or continue does not imply broader authority.
 
@@ -73,6 +80,10 @@ Parallel agents must own disjoint issues and disjoint write scopes. If two
 implementers need the same file, the orchestrator must sequence them or land an
 interface split first.
 
+Write scope is a product-repo path set, not only a path in this forge. Two
+active slices must not both write `v9fs/linux` or both write the same
+`v9fs/test` harness surface.
+
 ## Backlog Contract
 
 GitHub is the backlog. Maintain a short dependency-ordered horizon configured in
@@ -86,6 +97,9 @@ GitHub is the backlog. Maintain a short dependency-ordered horizon configured in
 
 Do not use private chat plans as the only backlog. Do not manufacture speculative
 issues merely to satisfy the horizon.
+
+Public `v9fs/linux` and `v9fs/test` issues remain product trackers and evidence
+sources. They are not a second agent backlog. Link them from the work slice.
 
 ## Slice Contract
 
@@ -123,6 +137,10 @@ demonstrate the claim without implying broader behavior.
 Use the proof ladder in `docs/PROOF_MODEL.md` and the exact project selection in
 `docs/project-formulation.md`.
 
+Kernel Image build success is static. A named harness suite in `v9fs/test` is
+integration. Relative comparison against the prior newest v6+ tag is
+operational and only when the slice claims it.
+
 ## Review Contract
 
 No self-approval. Review comments classify landing impact:
@@ -153,6 +171,8 @@ decision-critical questions remain unresolved.
   ledgers preserve domain evidence and must not silently contradict GitHub.
 - Host-specific paths, CLI, and deferred dual-host or GitHub-native work live
   in `docs/HOST.md`. Do not add host enforcement in an unrelated slice.
+- Product PRs live in `v9fs/linux` and/or `v9fs/test`. Link them from the slice
+  issue in this repository.
 
 ## Methodology Contract
 

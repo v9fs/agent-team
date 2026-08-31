@@ -1,17 +1,34 @@
-# GitHub Agentic Team Template
+# v9fs Agent Team
 
-This repository is a reusable operating scaffold for GitHub-driven agentic
-engineering teams. It treats each non-trivial issue as a proof-carrying work
-slice: one dependency boundary, one coherent behavior change, one observable
-proof promotion, one independent review, and one synchronized closeout.
+> Generated as an A-Team project from `ericvh/github-agentic-team-template`.
+> The `template` remote preserves the source scaffold; `origin` is
+> `git@github.com:v9fs/agent-team.git`.
 
-The scaffold is intentionally domain-neutral. Replace the angle-bracketed
-project fields, select a semantic slice unit that fits the work, and delete any
-ledger or telemetry surface that does not answer a real coordination or proof
-question.
+Linux 9P/v9fs work already splits across two public trees: `v9fs/linux` is a
+rebase-clean mainline mirror, and `v9fs/test` owns sync, Image publish, harness
+CI, and the wiki status table. Putting an agent-team scaffold into either
+product repo would either fight upstream rebases or mix process contracts with
+harness CI. This repository is the combined coordination forge: one
+proof-carrying backlog for issue fixes and later development that may land in
+linux, test, or both.
 
-This is a GitHub edition of a GitLab-originated process. Host mapping and
-deferred dual-host or GitHub-native follow-ups are in [HOST.md](docs/HOST.md).
+## Three-repo split
+
+| Repo | Role | Hosts a-team scaffold? |
+| --- | --- | --- |
+| [`v9fs/linux`](https://github.com/v9fs/linux) | Kernel source mirror. Product PRs for v9fs. No `.github`. | No |
+| [`v9fs/test`](https://github.com/v9fs/test) | Sync, kernel Image publish, regression suites, wiki, artifacts | No |
+| **`v9fs/agent-team` (this)** | Work-slice issues, evidence, proof, independent review, methodology | Yes |
+
+Existing org boards ([roadmap](https://github.com/orgs/v9fs/projects/2),
+[Test Infrastructure](https://github.com/orgs/v9fs/projects/4),
+[Edgentic](https://github.com/orgs/v9fs/projects/5)) remain human product
+trackers. They are not workflow authority. Issues and PRs in this repository
+are.
+
+A slice names `area:linux`, `area:test`, or `area:cross-cut`. Implementation
+PRs land in the product repo(s) named by the write scope. This repo's own PRs
+are process, evidence, and skills unless a slice explicitly says otherwise.
 
 ## Core Model
 
@@ -36,17 +53,15 @@ The team has six responsibilities:
 One agent may hold several responsibilities across a project, but a slice's
 creator and independent reviewer must be distinct.
 
-## Start a Project
+## Start here
 
-1. Copy or fork this repository.
-2. Fill [project-formulation.md](docs/project-formulation.md).
-3. Replace the mission and authority placeholders in [AGENTS.md](AGENTS.md).
-4. Choose the project proof levels in [PROOF_MODEL.md](docs/PROOF_MODEL.md).
-5. Remove ledgers that duplicate GitHub without preserving domain evidence.
-6. Run `scripts/check-scaffold.sh`.
-7. Create milestone `M0 - Bootstrap`, then open the first issue using the
-   `Work Slice` template.
-8. Land one vertical slice before expanding the process or parallel team.
+1. Read [AGENTS.md](AGENTS.md) and [docs/project-formulation.md](docs/project-formulation.md).
+2. Use [docs/ledgers/decision-records/D0002-combined-linux-test-forge.md](docs/ledgers/decision-records/D0002-combined-linux-test-forge.md) for the combined-repo rule.
+3. Run `scripts/check-scaffold.sh`.
+4. Open work from the `Work Slice` issue template. Do not start implementation
+   until evidence is pinned.
+5. Land product changes in `v9fs/linux` and/or `v9fs/test`. Close the slice here
+   only after proof, independent review, and durable state match.
 
 ## Repository Surfaces
 
@@ -67,7 +82,7 @@ creator and independent reviewer must be distinct.
 
 ```text
 kind:<feature|bug|migration|experiment|cleanup|methodology|scaffold>
-area:<project-domain>
+area:<linux|test|cross-cut>
 proof:<none|mapped|static|unit|contract|integration|operational>
 status:<planned|active|blocked|review|ready|landed>
 review:<needs-independent|changes-requested|approved>
@@ -93,6 +108,9 @@ These are starting values. Change them to fit project risk and cycle time.
 scripts/check-scaffold.sh
 git diff --check
 ```
+
+Product proof for a kernel or harness slice is the named `v9fs/test` workflow,
+wiki table, or artifact — not this repository's scaffold job.
 
 ## Provenance
 

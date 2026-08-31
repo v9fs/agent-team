@@ -25,7 +25,7 @@ only the separator is `:` instead of `::`.
 | Family | Examples | Meaning |
 | --- | --- | --- |
 | `kind:*` | `feature`, `bug`, `migration`, `experiment`, `cleanup`, `methodology`, `scaffold` | work type |
-| `area:*` | project domains | changed or owned domain |
+| `area:*` | `linux`, `test`, `cross-cut` | kernel tree, harness/CI, or both |
 | `proof:*` | `none`, `mapped`, `static`, `unit`, `contract`, `integration`, `operational` | current proof level |
 | `status:*` | `planned`, `active`, `blocked`, `review`, `ready`, `landed` | workflow state |
 | `review:*` | `needs-independent`, `changes-requested`, `approved` | independent review state |

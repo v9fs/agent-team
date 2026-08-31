@@ -104,9 +104,9 @@ Authority levels:
 
 | Rank | Issue | Outcome | Evidence boundary | Proof promotion | Predecessor | Unblocks |
 | --- | --- | --- | --- | --- | --- | --- |
-| 1 | M0 bootstrap | Pin t0011/t0013 tip residuals (`v9fs/test#28`) across diod, v9fs, and harness; named proof plan and non-claims | `v9fs/test#28`, harness logs, diod/v9fs tip behavior | Unmapped → Mapped | — | Implementation slice |
-| 2 | (planned) | Land the mapped residual as a kernel, diod, and/or harness change with a non-XFAIL assertion | Pins from slice 1 | Mapped → Integration | 1 | Relative/nightly compare |
-| 3 | (horizon) | Next P0 from Test Infrastructure or a linux bug with a harness reproduction | Named linux/test issues | Mapped before code | 2 | Feature slices |
+| 1 | [#1](https://github.com/v9fs/agent-team/issues/1) | Pin t0011/t0013 as two independent claims | E0003–E0006; run 32929975795 | Unmapped → Mapped | — | Two implementation slices |
+| 2 | (open after #1 lands) | t0011: squashuser vs ownership assertion | E0005/E0006 t0011 only | Mapped → Integration | 1 | Drop matching XFAIL rows |
+| 3 | (open after #1 lands) | t0013: ACL xattr / `TMPFS_XATTR` vs 9p path | E0003/E0005 t0013 only | Mapped → Integration | 1 | Drop matching XFAIL rows |
 
 Execute only the first slice before deciding whether more process, telemetry, or
 parallelism is justified.

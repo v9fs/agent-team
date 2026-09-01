@@ -1,0 +1,19 @@
+# Snapshot of v9fs/test diod/xfail.txt at harness
+# e896a9b2db1e87dfeaaa1bb0208568469c8172c3 (2026-09-01).
+# Machine-parsed FAIL lines only (comments dropped by v9fs-diod-regression-eval).
+t0011-v9fs-allsquash.t :: root can create a directory, mode 755
+t0011-v9fs-allsquash.t :: nobody can create a directory, mode 755
+t0011-v9fs-allsquash.t :: nobody cannot create a file in nobody directory
+t0011-v9fs-allsquash.t :: user can create a file in rootdir
+t0011-v9fs-allsquash.t :: user can create a file in nobodydir
+t0011-v9fs-allsquash.t :: user can chmod 777 nobody directory
+t0011-v9fs-allsquash.t :: exited with status 1
+t0011-v9fs-allsquash :: automake error/timeout
+t0013-v9fs-acl.t :: create a test file and setfacl -m u:root:r
+t0013-v9fs-acl.t :: getfacl confirms ACL is set
+t0013-v9fs-acl.t :: it is set on the server too
+t0013-v9fs-acl.t :: getfacl confirms ACL is unset
+t0013-v9fs-acl.t :: it is unset on the server too
+t0013-v9fs-acl.t :: create a test directory and setfacl -d -m u:root:r
+t0013-v9fs-acl.t :: exited with status 1
+t0013-v9fs-acl :: automake error/timeout

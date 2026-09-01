@@ -1,0 +1,139 @@
+{
+  "captured_at": "2026-09-01T14:20:00Z",
+  "diod_repo": "https://github.com/chaos/diod",
+  "diod_head": "de51d1ee1bd5ccf1d8c16b96227c8bb03ec50106",
+  "diod_head_date": "2026-06-23T21:18:16Z",
+  "diod_head_subject": "Merge pull request #173 from erentar/fix-gcc15",
+  "harness_repo": "https://github.com/v9fs/test",
+  "harness_sha": "e896a9b2db1e87dfeaaa1bb0208568469c8172c3",
+  "harness_run": 33511542559,
+  "harness_run_url": "https://github.com/v9fs/test/actions/runs/33511542559",
+  "harness_subset": [
+    "t0010-v9fs-runasuser.t",
+    "t0011-v9fs-allsquash.t",
+    "t0012-v9fs-multiuser.t",
+    "t0013-v9fs-acl.t",
+    "t0020-dbench.t",
+    "t0021-postmark.t"
+  ],
+  "eval": {
+    "fail_lines": 16,
+    "xfail_baseline": 16,
+    "unexpected": 0
+  },
+  "note": "GitHub issues list/search for chaos/diod returns only open PRs. Enumerate by number. Do not treat search completeness as coverage.",
+  "open_items": [
+    {
+      "number": 31,
+      "kind": "pull",
+      "title": "use read() for sequential reads on fd",
+      "html_url": "https://github.com/chaos/diod/pull/31",
+      "updated_at": "2016-11-22T07:36:19Z",
+      "disposition": "feature-stale-pr"
+    },
+    {
+      "number": 35,
+      "kind": "issue",
+      "title": "RLERROR doesn't work across architectures",
+      "html_url": "https://github.com/chaos/diod/issues/35",
+      "updated_at": "2022-06-02T04:57:33Z",
+      "disposition": "not-exercised-arch"
+    },
+    {
+      "number": 53,
+      "kind": "issue",
+      "title": "Very slow over SSH port forwarding",
+      "html_url": "https://github.com/chaos/diod/issues/53",
+      "updated_at": "2019-04-05T15:42:19Z",
+      "disposition": "operational"
+    },
+    {
+      "number": 59,
+      "kind": "issue",
+      "title": "[Question] Performance bottleneck for large files",
+      "html_url": "https://github.com/chaos/diod/issues/59",
+      "updated_at": "2021-10-09T09:01:57Z",
+      "disposition": "operational"
+    },
+    {
+      "number": 90,
+      "kind": "issue",
+      "title": "Support OFD locks?",
+      "html_url": "https://github.com/chaos/diod/issues/90",
+      "updated_at": "2022-06-15T01:41:10Z",
+      "disposition": "feature"
+    },
+    {
+      "number": 91,
+      "kind": "pull",
+      "title": "Implement locking with OFD locks when present.",
+      "html_url": "https://github.com/chaos/diod/pull/91",
+      "updated_at": "2022-06-15T09:40:46Z",
+      "disposition": "feature-stale-pr"
+    },
+    {
+      "number": 138,
+      "kind": "issue",
+      "title": "add tests for Tremove/Trename",
+      "html_url": "https://github.com/chaos/diod/issues/138",
+      "updated_at": "2025-05-02T21:15:38Z",
+      "disposition": "coverage-gap"
+    },
+    {
+      "number": 140,
+      "kind": "issue",
+      "title": "Performance factors (and how to debug low throughput)",
+      "html_url": "https://github.com/chaos/diod/issues/140",
+      "updated_at": "2025-05-19T16:21:51Z",
+      "disposition": "operational"
+    },
+    {
+      "number": 148,
+      "kind": "issue",
+      "title": "vsock support",
+      "html_url": "https://github.com/chaos/diod/issues/148",
+      "updated_at": "2025-10-26T23:51:10Z",
+      "disposition": "feature"
+    },
+    {
+      "number": 162,
+      "kind": "issue",
+      "title": "possible memory leak",
+      "html_url": "https://github.com/chaos/diod/issues/162",
+      "updated_at": "2025-11-25T17:15:52Z",
+      "disposition": "operational"
+    },
+    {
+      "number": 163,
+      "kind": "issue",
+      "title": "diod_getlock:  user@host:/path: Invalid argument",
+      "html_url": "https://github.com/chaos/diod/issues/163",
+      "updated_at": "2025-11-25T18:15:49Z",
+      "disposition": "coverage-gap"
+    },
+    {
+      "number": 164,
+      "kind": "issue",
+      "title": "diod server: infinite loop",
+      "html_url": "https://github.com/chaos/diod/issues/164",
+      "updated_at": "2025-12-15T16:22:43Z",
+      "disposition": "not-exercised-arch"
+    },
+    {
+      "number": 165,
+      "kind": "pull",
+      "title": "WIP libdiod: fix readdir problem on 32 bit server",
+      "html_url": "https://github.com/chaos/diod/pull/165",
+      "updated_at": "2025-12-03T16:35:15Z",
+      "disposition": "not-exercised-arch"
+    },
+    {
+      "number": 166,
+      "kind": "issue",
+      "title": "t0001-basic-runasuser.t tries to execute from source tree as nobody",
+      "html_url": "https://github.com/chaos/diod/issues/166",
+      "updated_at": "2025-12-12T16:30:59Z",
+      "disposition": "not-in-subset"
+    }
+  ]
+}

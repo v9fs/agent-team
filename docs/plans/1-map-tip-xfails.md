@@ -12,8 +12,8 @@
   `94b2182f54b30a073d893990db8f64e69f0d911a`
 - Target component/API/artifact: evidence map + proof plan (no product code)
 - GitHub milestone: M0 - Bootstrap
-- GitHub issue: https://github.com/v9fs/agent-team/issues/1
-- GitHub PR: to fill
+- GitHub issue: https://github.com/v9fs/agent-team/issues/1 (closed)
+- GitHub PR: https://github.com/v9fs/agent-team/pull/2 (merged)
 - Branch: `scaffold/1-map-tip-xfails`
 - Authority level/exceptions: A2; no merge to `v9fs/linux`; no `.github` on linux
 - Owner: evidence mapper (this slice)
@@ -36,8 +36,8 @@
 | Rank | GitHub issue | Outcome | Dependency/proof boundary | Why next | Stop/defer rule |
 | --- | --- | --- | --- | --- | --- |
 | 1 | agent-team#1 | Pins + two independent claims | Unmapped → Mapped | M0; current next-action | Do not implement |
-| 2 | (create after #1 lands) | t0011 squashuser vs assertion | Mapped → Integration on t0011 only | Independent of ACL | Stop if `--squashuser` trial is not decisive |
-| 3 | (create after #1 lands) | t0013 ACL xattr / TMPFS_XATTR | Mapped → Integration on t0013 only | Independent of squash | Stop if in-guest local `/tmp` setfacl is not EOPNOTSUPP and not PASS |
+| 2 | [#5](https://github.com/v9fs/agent-team/issues/5) | t0011 squashuser vs assertion | Mapped → Integration on t0011 only | Independent of ACL | Stop if `--squashuser` trial is not decisive |
+| 3 | [#6](https://github.com/v9fs/agent-team/issues/6) | t0013 ACL xattr / TMPFS_XATTR | Mapped → Integration on t0013 only | Independent of squash | Stop if in-guest local `/tmp` setfacl is not EOPNOTSUPP and not PASS |
 
 ## Evidence Map
 
@@ -103,6 +103,6 @@ mounts and the client issues `Txattrwalk`.
 - [x] Evidence, authority, dependencies, and write scopes are explicit.
 - [x] Target behavior and non-claims are bounded.
 - [x] Proof rejects the named plausible false positive (one-bug mapping).
-- [ ] Required review and approval are complete.
-- [x] Follow-ups have bounded dispositions (two later slices, not opened yet).
-- [ ] GitHub and durable evidence agree after landing.
+- [x] Required review and approval are complete.
+- [x] Follow-ups have bounded dispositions ([#5](https://github.com/v9fs/agent-team/issues/5), [#6](https://github.com/v9fs/agent-team/issues/6)).
+- [x] GitHub and durable evidence agree after landing.

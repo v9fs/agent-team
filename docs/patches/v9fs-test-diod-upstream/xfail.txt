@@ -1,0 +1,56 @@
+# Known failures (XFAIL) for diod sharness suite when running under the
+# v9fs/test guest-direct QEMU harness (virtio hostshare mount).
+#
+# Format: one entry per line, matching the strings parsed from diod's
+# t/test-suite.log:
+#
+#   <testfile> :: <description>
+#
+# Keep this list minimal and update it intentionally when behavior changes.
+# Comment lines are ignored by scripts/v9fs-diod-regression-eval.
+#
+# t0010 runasuser ACCESS_SINGLE / root-negative assertions are expected to PASS
+# when the suite runs as non-root `v9fs` with v9fs-mount-9p.
+#
+# Currency: diod-regression clones chaos/diod DIOD_REF=master. Pinned HEAD
+# de51d1ee1bd5ccf1d8c16b96227c8bb03ec50106 (2026-06-23 gcc15 #173; still tip
+# 2026-09-01). Harness TESTS= subset is t0010 t0011 t0012 t0013 t0020 t0021.
+#
+# Open chaos/diod items vs this allow-list (none currently add FAIL rows):
+#   #31 PR sequential read() for special files — feature-stale-pr, not in subset
+#   #35 RLERROR errno across architectures — not-exercised-arch (CI is arm64/arm64)
+#   #53 slow over SSH port forward — operational; suite uses unix sockets
+#   #59 large-file throughput question — operational
+#   #90 OFD locks feature — t0010 flock PASSed; OFD is unimplemented enhancement
+#   #91 PR OFD locks — feature-stale-pr (2022)
+#   #138 add Tremove/Trename tests — coverage-gap in diod; kernel uses unlinkat
+#   #140 low throughput debug — operational
+#   #148 vsock support — feature; harness is virtio-9p + unix diod
+#   #162 possible memory leak — operational; no RSS gate
+#   #163 diod_getlock EINVAL (sqlite) — coverage-gap; t0010 flock is not this path
+#   #164 infinite readdir loop — not-exercised-arch (32-bit server d_off truncation)
+#   #165 WIP PR fix for #164 — not-exercised-arch
+#   #166 t0001 nobody exec from source tree — not-in-subset (t0001 not in TESTS=)
+# Full inventory: v9fs/agent-team docs/ledgers/diod-upstream.md
+# Revisit when chaos/diod HEAD moves or open issue count changes.
+
+# allsquash identity mapping gaps under guest harness (v9fs/test#28, not a
+# chaos/diod issue)
+t0011-v9fs-allsquash.t :: root can create a directory, mode 755
+t0011-v9fs-allsquash.t :: nobody can create a directory, mode 755
+t0011-v9fs-allsquash.t :: nobody cannot create a file in nobody directory
+t0011-v9fs-allsquash.t :: user can create a file in rootdir
+t0011-v9fs-allsquash.t :: user can create a file in nobodydir
+t0011-v9fs-allsquash.t :: user can chmod 777 nobody directory
+t0011-v9fs-allsquash.t :: exited with status 1
+t0011-v9fs-allsquash :: automake error/timeout
+
+# posixacl / setfacl residuals on tip (v9fs/test#28, not a chaos/diod issue)
+t0013-v9fs-acl.t :: create a test file and setfacl -m u:root:r
+t0013-v9fs-acl.t :: getfacl confirms ACL is set
+t0013-v9fs-acl.t :: it is set on the server too
+t0013-v9fs-acl.t :: getfacl confirms ACL is unset
+t0013-v9fs-acl.t :: it is unset on the server too
+t0013-v9fs-acl.t :: create a test directory and setfacl -d -m u:root:r
+t0013-v9fs-acl.t :: exited with status 1
+t0013-v9fs-acl :: automake error/timeout

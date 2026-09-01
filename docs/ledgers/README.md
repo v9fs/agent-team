@@ -15,6 +15,7 @@ Keep only the records that answer a real project question:
 | `experiment-log.md` | Which hypothesis was tested, what happened, and when should it rerun? |
 | `risk-ledger.md` | Which trigger could harm the project, and what evidence closes it? |
 | `methodology-ledger.md` | Which operating-method review occurred, what changed, and what triggers the next one? |
+| `diod-upstream.md` | Is harness diod current, and are open chaos/diod issues classified against `diod/xfail.txt`? |
 
 Do not duplicate assignees, issue state, PR state, or labels without an explicit
 synchronization reason and authority rule.

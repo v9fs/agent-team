@@ -1,10 +1,9 @@
 # diod upstream vs known-fail
 
-Disjoint ledger for the diod-currency / known-fail inventory (this slice).
-Do not edit `evidence-map.md` or `proof-ledger.md` here: PR
-[#2](https://github.com/v9fs/agent-team/pull/2) owns E0003–E0006 on
-`scaffold/1-map-tip-xfails`. After that lands, copy E0007 / P0003 into the
-main tables.
+Disjoint ledger for the diod-currency / known-fail inventory (issue #4 / PR #3).
+E0007 / E0008 / P0003 are copied into `evidence-map.md` and `proof-ledger.md`
+after PR #2 landed. Keep this file as the live inventory; re-pin when HEAD
+or `open_items` change.
 
 ## Evidence
 

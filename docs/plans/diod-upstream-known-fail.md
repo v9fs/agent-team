@@ -33,8 +33,8 @@
   new XFAIL FAIL rows; t0011/t0013 remain `v9fs/test#28` (PR #2); Debian
   packaged diod is not in the CI matrix; `diod-9p2000.L` not claimed
 - Required dependencies: public chaos/diod + v9fs/test; run 33511542559 logs
-- Deferred dependencies: product PR on `v9fs/test`; copy E0007/P0003 into
-  main ledgers after PR #2 lands; optional `DIOD_REF` SHA pin
+- Deferred dependencies: product PR on `v9fs/test` (comment-only `diod/xfail.txt`);
+  optional `DIOD_REF` SHA pin. E0007/P0003 copy into main ledgers is this closeout.
 
 ## Backlog Context
 

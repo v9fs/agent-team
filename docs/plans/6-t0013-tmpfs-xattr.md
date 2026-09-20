@@ -14,7 +14,7 @@
 - GitHub milestone: M0 - Bootstrap
 - GitHub issue: https://github.com/v9fs/agent-team/issues/6
 - GitHub PR: https://github.com/v9fs/agent-team/pull/9
-- Product PR: to fill (`v9fs/test`) — wait for [v9fs/test#31](https://github.com/v9fs/test/pull/31) to free `diod/xfail.txt`
+- Product PR: https://github.com/v9fs/test/pull/32 (`v9fs/test`) — publish/`TMPFS_XATTR` only; xfail drop waits for Image PASS (and [test#31](https://github.com/v9fs/test/pull/31) for t0011 xfail ownership)
 - Branch: `bug/6-t0013-tmpfs-xattr`
 - Authority level/exceptions: A2; no merge to `v9fs/linux`; no `.github` on linux
 - Owner: implementer (this slice)

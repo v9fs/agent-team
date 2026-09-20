@@ -13,8 +13,8 @@
   republished Image + `diod/xfail.txt` (not chaos/diod, not linux tree files)
 - GitHub milestone: M0 - Bootstrap
 - GitHub issue: https://github.com/v9fs/agent-team/issues/6
-- GitHub PR: to fill
-- Product PR: to fill (`v9fs/test`)
+- GitHub PR: https://github.com/v9fs/agent-team/pull/9
+- Product PR: to fill (`v9fs/test`) — wait for [v9fs/test#31](https://github.com/v9fs/test/pull/31) to free `diod/xfail.txt`
 - Branch: `bug/6-t0013-tmpfs-xattr`
 - Authority level/exceptions: A2; no merge to `v9fs/linux`; no `.github` on linux
 - Owner: implementer (this slice)

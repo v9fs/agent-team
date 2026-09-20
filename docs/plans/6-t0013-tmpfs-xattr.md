@@ -2,34 +2,34 @@
 
 ## Summary
 
-- Slice: Make t0013 POSIX ACL a non-XFAIL by enabling tmpfs xattrs on the
-  published Image, after a local `/tmp` discriminator confirms export-fs blame
+- Slice: Make t0013 POSIX ACL a non-XFAIL by enabling Image `TMPFS_XATTR` **and**
+  mounting a native guest tmpfs on `/tmp` (hostshare `/tmp` is 9p-backed)
 - Human outcome: t0013 PASSes under guest-direct diod-regression; matching
   `diod/xfail.txt` rows are gone; no loopback/ext4 trash mount
-- Evidence version: mapping run 32929975795; confirm on test#31 run
-  35522122683 (`Txattrcreate` + `Tclunk` ecode 95); Image `kernel-latest` =
-  v7.2; diod `de51d1ee1bd5ccf1d8c16b96227c8bb03ec50106`
-- Target component/API/artifact: `v9fs/test` `linux-kernel-publish.yml` +
-  republished Image + `diod/xfail.txt` (not chaos/diod, not linux tree files)
+- Evidence version: mapping run 32929975795; Integration runs 35528986660 /
+  35529647361 (t0013 17/17); Image publish 35525453812; product main `25d3eea`
+- Target component/API/artifact: `v9fs/test` publish.yml + `v9fs-build-initrd` +
+  `diod/xfail.txt` (not chaos/diod, not linux tree files)
 - GitHub milestone: M0 - Bootstrap
 - GitHub issue: https://github.com/v9fs/agent-team/issues/6
 - GitHub PR: https://github.com/v9fs/agent-team/pull/9
-- Product PR: https://github.com/v9fs/test/pull/32 (TMPFS_XATTR Image) + https://github.com/v9fs/test/pull/33 (guest `/tmp` tmpfs mount); XFAIL drop waits for #33 PASS
+- Product PR: https://github.com/v9fs/test/pull/32 (TMPFS_XATTR Image, merged) +
+  https://github.com/v9fs/test/pull/33 (guest `/tmp` tmpfs + XFAIL drop, merged `25d3eea`)
 - Branch: `bug/6-t0013-tmpfs-xattr`
 - Authority level/exceptions: A2; no merge to `v9fs/linux`; no `.github` on linux
 - Owner: implementer (this slice)
-- Independent reviewer: distinct from implementer
+- Independent reviewer: distinct from implementer (**still required**)
 - Date: 2026-09-20
 
 ## Scope
 
-- In scope (all three, in order):
-  1. Discriminator: in-guest `setfacl` / `getfattr` on a **local** `/tmp` file
-     (not 9p). EOPNOTSUPP ⇒ export fs. Local PASS ⇒ stop and re-blame 9p/diod.
-  2. Product: `-e TMPFS_XATTR` (and keep/confirm `-e TMPFS_POSIX_ACL`) in
-     `linux-kernel-publish.yml`; republish Image; optionally widen kconfig dump
-     to `CONFIG_TMPFS_*` so Integration can show both flags.
-  3. Drop t0013 rows from `diod/xfail.txt` only after diod-regression t0013 PASS.
+- In scope (landed product path):
+  1. Discriminator: in-guest `setfacl` on a **local** `/tmp` file (hard gate in
+     diod-regression init).
+  2. Image: `-e TMPFS_XATTR` (+ `TMPFS_POSIX_ACL`) in publish; republish.
+  3. Guest: native tmpfs mount on `/tmp` inside diod-regression chroot (decisive
+     after Image alone still failed on 9p-backed `/tmp`).
+  4. Drop t0013 rows from `diod/xfail.txt` after PASS.
 - Explicit non-claims: t0011 squashuser; loopback/ext4 trash mount; chaos/diod
   source; `v9fs/linux` in-tree files; Debian apt diod
 - Required dependencies: mapping #1 / PR #2; product tracker v9fs/test#28;
@@ -75,7 +75,7 @@
 | Mapped | This plan + E0003/E0005 | Export-fs vs 9p path is an explicit choice |
 | Unit | not claimed | |
 | Contract/Golden | not claimed | |
-| Integration | In-guest local `/tmp` setfacl then Harness CI `diod-regression` on Image built with new publish | Local `/tmp` no longer EOPNOTSUPP; t0013 PASS; t0013 XFAIL rows removed; t0011 still PASS |
+| Integration | Harness CI diod-regression on [test#33](https://github.com/v9fs/test/pull/33) after Image #32 | Local `/tmp` setfacl PASS; t0013 17/17 PASS; t0013 XFAIL removed; t0011 still XFAIL |
 | Operational | not claimed | |
 
 Plausible wrong mechanism and the observation that rejects it:
@@ -103,10 +103,10 @@ scope either way.
 
 ## Exit Criteria
 
-- [ ] Evidence, authority, dependencies, and write scopes are explicit.
-- [ ] Target behavior and non-claims are bounded (no loopback).
-- [ ] Local `/tmp` discriminator recorded before claiming the fix path.
-- [ ] Proof rejects the named plausible false positive.
-- [ ] Required review and approval are complete.
-- [ ] Follow-ups have bounded dispositions.
-- [ ] GitHub and durable evidence agree after landing.
+- [x] Evidence, authority, dependencies, and write scopes are explicit.
+- [x] Target behavior and non-claims are bounded (no loopback).
+- [x] Local `/tmp` discriminator recorded before claiming the fix path.
+- [x] Proof rejects the named plausible false positive (Image-only failed; guest tmpfs fixed).
+- [ ] Required review and approval are complete (**distinct** independent review of this forge PR).
+- [x] Follow-ups have bounded dispositions (t0011 → #5/#31).
+- [x] Product GitHub and durable evidence agree after landing (`25d3eea`); forge closeout waits on review.

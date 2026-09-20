@@ -13,8 +13,8 @@
   + `diod/xfail.txt` (not chaos/diod, not linux)
 - GitHub milestone: M0 - Bootstrap
 - GitHub issue: https://github.com/v9fs/agent-team/issues/5
-- GitHub PR: to fill
-- Product PR: to fill (`v9fs/test`)
+- GitHub PR: https://github.com/v9fs/agent-team/pull/8
+- Product PR: https://github.com/v9fs/test/pull/31 (`v9fs/test`)
 - Branch: `bug/5-t0011-squashuser`
 - Authority level/exceptions: A2; no merge to `v9fs/linux`; no `.github` on linux
 - Owner: implementer (this slice)

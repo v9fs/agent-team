@@ -116,21 +116,28 @@ this program.
       `trace_9p_protocol_dump` (`protocol.c:782-785`).
     - `-E2BIG` emits only `P9_DEBUG_ERROR` with the name (`:789-792`).
     - R1 keeps both or documents dropping them.
-  - Export class: `#[export]` exports with `EXPORT_SYMBOL_GPL`
-    (`rust/macros/lib.rs:257`), but the C symbol is `EXPORT_SYMBOL`
+  - Export class: all Rust symbols are currently auto-exported with
+    `EXPORT_SYMBOL_GPL` (`rust/macros/lib.rs:257-258`), but the C symbol is `EXPORT_SYMBOL`
     (`protocol.c:800`). The in-tree caller is GPL. R1 lists this as a visible
     ABI change for non-GPL out-of-tree modules.
   - Build precedent: `drm_panic_qr.o` is linked into the composite C/Rust
     `drm.ko` (`drivers/gpu/drm/Makefile:95`). The equivalent for `9pnet.ko` is
     unverified until R1 builds it.
 - Unit proof (KUnit `net/9p/protocol_kunit.c`): run C and Rust on identical
-  inputs, with `*dirent` pre-filled by a sentinel pattern, and compare the
-  return value and every byte of `p9_dirent`. Inputs:
-  - well-formed entries captured from a diod readdir;
-  - truncation at every byte offset;
-  - name lengths 0, 255, 256, and 65535;
-  - embedded-NUL names with the NUL both before and after byte 255;
-  - a deterministic pseudo-random corpus.
+  inputs, with `*dirent` pre-filled by a sentinel pattern. Compare the return
+  value, every byte outside `d_name` (including qid padding and tail padding),
+  and `d_name` up to and including its NUL.
+  - Do not compare `d_name` bytes after the NUL. The word-at-a-time path of
+    `sized_strscpy()` (`lib/string.c`) zeroes them, depending on
+    `DCACHE_WORD_ACCESS`, unaligned-access support, alignment, and KMSAN.
+    The alternative is for Rust to call `bindings::sized_strscpy`.
+  - Inputs:
+    - well-formed entries captured from a diod readdir;
+    - truncation at every byte offset;
+    - name lengths 0, 255, 256, and 65535;
+    - embedded-NUL names with the NUL both before and after byte 255, and
+      mid-word, run with KMSAN both on and off;
+    - a deterministic pseudo-random corpus.
 - Integration proof: `v9fs/test` diod-regression on the R-H Rust Image with
   `NET_9P_RUST_DIRENT=y`. Readdir-heavy suites must PASS with the same XFAIL
   set as the C Image. `v9fs_dir_readdir_dotl()` maps every negative return
@@ -196,6 +203,7 @@ D0003 is unaccepted. The bodies above are ready to paste into
 - [x] Evidence, authority, dependencies, and write scopes are explicit.
 - [x] Target behavior and non-claims are bounded.
 - [x] Proof rejects the named plausible false positive (stale or synthetic tree).
-- [ ] Required review and approval are complete.
+- [x] Independent review approved at `a11faae`. Remaining suggestions are
+  folded into R1 or declined in PR #10.
 - [ ] D0003 accepted or amended by a human; R-H and R1 issues created.
 - [ ] GitHub and durable evidence agree after landing.

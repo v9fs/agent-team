@@ -19,14 +19,16 @@ A human asked for a Rust port of the v9fs kernel filesystem (`fs/9p` and
 - `v9fs/linux` `upstream` is `602042bf29f6efde39cfb5fdd9289bf4854bc0c5`
   (v7.3-rc6+). It has 33 C files and 15,024 lines in `fs/9p`, `net/9p`, and
   `include/net/9p`.
-- `rust/kernel/fs/` contains only `file.rs` and `kiocb.rs`. Mainline has no
-  Rust binding for filesystem registration, `fs_context`, superblocks, inodes,
-  dentries, address spaces, netfs, fscache, POSIX ACLs, xattr handlers, virtio,
-  sockets, Xen grant tables, RDMA, or USB gadget functions.
+- `rust/kernel/fs/` contains only `file.rs` and `kiocb.rs`. Raw bindgen types
+  from `<linux/fs.h>` exist, but mainline has no safe Rust abstraction for
+  filesystem registration, `fs_context`, superblocks, inodes, dentries, address
+  spaces, netfs, fscache, POSIX ACLs, xattr handlers, virtio, sockets, Xen
+  grant tables, RDMA, or USB gadget functions.
 - None of the 9p operation tables for those subsystems is named in `rust/`.
-  The exception is `file_operations`, which `miscdevice` already wraps. The
-  inventory found 197 external call symbols in `fs/9p`, of which 19 (9%) are
-  named anywhere in `rust/`. In `net/9p` it found 278, of which 68 (24%) are.
+  The exceptions are `file_operations`, which `miscdevice` already wraps, and
+  the configfs tables. The inventory found 196 external call symbols in
+  `fs/9p`, of which 18 (9%) are named anywhere in `rust/`. In `net/9p` it found
+  269, of which 63 (23%) are.
 - The upstream Rust VFS series (Wedson Almeida Filho; tarfs, ext2, and puzzlefs
   samples) only reached RFC or experimental branches. The merged `vfs rust`
   pulls up to v7.0 add only small infrastructure (E0010).

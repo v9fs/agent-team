@@ -63,7 +63,7 @@ needs no new kernel-wide abstraction beyond adding `net/9p/client.h` to
 
 ```bash
 python3 scripts/rust-port-inventory.py <linux@602042bf> \
-  --json docs/reports/rust-port-inventory.json --md docs/reports/rust-port-inventory.md
+  --md docs/reports/rust-port-inventory.md
 scripts/check-scaffold.sh
 ```
 

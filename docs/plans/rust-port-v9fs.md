@@ -8,7 +8,7 @@
   harness
 - Evidence version: `v9fs/linux` `upstream` =
   `602042bf29f6efde39cfb5fdd9289bf4854bc0c5` (v7.3-rc6+, 2026-10-07); E0009,
-  E0010; `docs/reports/rust-port-inventory.{md,json}`
+  E0010; `docs/reports/rust-port-inventory.md` (JSON regenerable; `docs/reports/**/*.json` is gitignored)
 - This slice: R0, mapping and strategy only (Unmapped → Mapped). No kernel code.
 - Strategy: D0003 (Proposed, human decision required)
 - GitHub milestone: proposed `M2 - Rust v9fs` (to be created by a human or a
@@ -109,7 +109,7 @@ a `d_off`/`d_type` mismatch at the first truncation offset.
 
 | Level | Command or artifact | Expected discriminating result |
 | --- | --- | --- |
-| Mapped | `python3 scripts/rust-port-inventory.py /path/to/linux@602042bf --json docs/reports/rust-port-inventory.json --md docs/reports/rust-port-inventory.md` | Reproduces the committed report byte-for-byte at the same HEAD |
+| Mapped | `python3 scripts/rust-port-inventory.py /path/to/linux@602042bf --md docs/reports/rust-port-inventory.md` | Reproduces the committed Markdown byte-for-byte at the same HEAD |
 | Static | `scripts/check-scaffold.sh`; `git diff --check`; `python3 -m py_compile scripts/rust-port-inventory.py` | Pass |
 | Negative | Run the inventory on a tree without `rust/kernel` | Exits 2 with `missing rust/kernel`, so it can't report success on a non-kernel tree |
 | Unit/Contract/Integration/Operational | not claimed | No Rust code exists yet |

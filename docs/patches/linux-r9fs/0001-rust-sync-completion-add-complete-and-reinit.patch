@@ -1,0 +1,45 @@
+From 11ca79c643532843c2dfbe7e860e4ff3179f07c0 Mon Sep 17 00:00:00 2001
+From: Cursor Agent <cursoragent@cursor.com>
+Date: Thu, 8 Oct 2026 12:53:14 +0000
+Subject: [PATCH 1/4] rust: sync: completion: add complete() and reinit()
+
+Single-waiter signalling from interrupt context and reuse of one
+completion across requests, needed by request/response transports.
+---
+ rust/kernel/sync/completion.rs | 20 ++++++++++++++++++++
+ 1 file changed, 20 insertions(+)
+
+diff --git a/rust/kernel/sync/completion.rs b/rust/kernel/sync/completion.rs
+index 35ff049ff..146bfa337 100644
+--- a/rust/kernel/sync/completion.rs
++++ b/rust/kernel/sync/completion.rs
+@@ -100,6 +100,26 @@ pub fn complete_all(&self) {
+         unsafe { bindings::complete_all(self.as_raw()) };
+     }
+ 
++    /// Signal a single task waiting on this completion.
++    ///
++    /// May be called from atomic context.
++    #[inline]
++    pub fn complete(&self) {
++        // SAFETY: `self.as_raw()` is a pointer to a valid `struct completion`.
++        unsafe { bindings::complete(self.as_raw()) };
++    }
++
++    /// Reset the completion to the not-done state so it can be reused.
++    ///
++    /// The caller must ensure that no task is waiting on the completion and that no concurrent
++    /// [`Completion::complete`] call is meant for the previous use; otherwise that signal is lost
++    /// or attributed to the next use.
++    #[inline]
++    pub fn reinit(&self) {
++        // SAFETY: `self.as_raw()` is a pointer to a valid `struct completion`.
++        unsafe { bindings::reinit_completion(self.as_raw()) };
++    }
++
+     /// Wait for completion of a task.
+     ///
+     /// This method waits for the completion of a task; it is not interruptible and there is no
+-- 
+2.43.0
+

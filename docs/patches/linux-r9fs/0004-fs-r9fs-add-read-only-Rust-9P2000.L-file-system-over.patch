@@ -1,0 +1,1067 @@
+From 05b7336f354e52aedfe91da5df98511fca5a7580 Mon Sep 17 00:00:00 2001
+From: Cursor Agent <cursoragent@cursor.com>
+Date: Thu, 8 Oct 2026 12:55:03 +0000
+Subject: [PATCH 4/4] fs: r9fs: add read-only Rust 9P2000.L file system over
+ virtio
+
+r9fs is a new, separate file system (not a replacement for fs/9p) that
+speaks 9P2000.L over a virtio-9p channel. The module registers both a
+virtio driver (r9fs_virtio) and the r9fs file system type.
+
+Supported: mount by virtio tag, version/attach, walk, getattr, lopen,
+read, readdir, readlink, statfs and clunk. The mount is read-only, has
+no page cache (cache=none semantics) and serializes one outstanding
+request per channel.
+
+Mount options: trans=virtio, version=9p2000.L, msize, uname, aname, uid.
+---
+ fs/Kconfig           |   1 +
+ fs/Makefile          |   1 +
+ fs/r9fs/Kconfig      |  15 +++
+ fs/r9fs/Makefile     |   3 +
+ fs/r9fs/client.rs    | 211 ++++++++++++++++++++++++++++++
+ fs/r9fs/proto.rs     | 229 ++++++++++++++++++++++++++++++++
+ fs/r9fs/r9fs.rs      | 305 +++++++++++++++++++++++++++++++++++++++++++
+ fs/r9fs/transport.rs | 208 +++++++++++++++++++++++++++++
+ 8 files changed, 973 insertions(+)
+ create mode 100644 fs/r9fs/Kconfig
+ create mode 100644 fs/r9fs/Makefile
+ create mode 100644 fs/r9fs/client.rs
+ create mode 100644 fs/r9fs/proto.rs
+ create mode 100644 fs/r9fs/r9fs.rs
+ create mode 100644 fs/r9fs/transport.rs
+
+diff --git a/fs/Kconfig b/fs/Kconfig
+index e05917adc..69a672c89 100644
+--- a/fs/Kconfig
++++ b/fs/Kconfig
+@@ -411,6 +411,7 @@ source "fs/smb/Kconfig"
+ source "fs/coda/Kconfig"
+ source "fs/afs/Kconfig"
+ source "fs/9p/Kconfig"
++source "fs/r9fs/Kconfig"
+ 
+ endif # NETWORK_FILESYSTEMS
+ 
+diff --git a/fs/Makefile b/fs/Makefile
+index 055dfc23d..f70a1fc15 100644
+--- a/fs/Makefile
++++ b/fs/Makefile
+@@ -109,6 +109,7 @@ obj-$(CONFIG_OMFS_FS)		+= omfs/
+ obj-$(CONFIG_JFS_FS)		+= jfs/
+ obj-$(CONFIG_XFS_FS)		+= xfs/
+ obj-$(CONFIG_9P_FS)		+= 9p/
++obj-$(CONFIG_R9FS_FS)		+= r9fs/
+ obj-$(CONFIG_AFS_FS)		+= afs/
+ obj-$(CONFIG_NILFS2_FS)		+= nilfs2/
+ obj-$(CONFIG_BEFS_FS)		+= befs/
+diff --git a/fs/r9fs/Kconfig b/fs/r9fs/Kconfig
+new file mode 100644
+index 000000000..6a26c1987
+--- /dev/null
++++ b/fs/r9fs/Kconfig
+@@ -0,0 +1,15 @@
++# SPDX-License-Identifier: GPL-2.0-only
++config R9FS_FS
++	tristate "r9fs: Rust 9P2000.L file system over virtio (EXPERIMENTAL)"
++	depends on RUST && VIRTIO=y
++	help
++	  A read-only 9P2000.L client file system written in Rust, using its
++	  own virtio-9p transport. It is independent of the C v9fs (9P_FS)
++	  and its 9pnet transports. Mount with:
++
++	    mount -t r9fs <mount_tag> <dir>
++
++	  If both this and NET_9P_VIRTIO are loaded, a virtio-9p device binds
++	  to whichever driver registers first.
++
++	  If unsure, say N.
+diff --git a/fs/r9fs/Makefile b/fs/r9fs/Makefile
+new file mode 100644
+index 000000000..96c202d1d
+--- /dev/null
++++ b/fs/r9fs/Makefile
+@@ -0,0 +1,3 @@
++# SPDX-License-Identifier: GPL-2.0
++
++obj-$(CONFIG_R9FS_FS) += r9fs.o
+diff --git a/fs/r9fs/client.rs b/fs/r9fs/client.rs
+new file mode 100644
+index 000000000..5e38b3a3f
+--- /dev/null
++++ b/fs/r9fs/client.rs
+@@ -0,0 +1,211 @@
++// SPDX-License-Identifier: GPL-2.0
++
++//! 9P2000.L client session over one [`Channel`].
++
++use crate::proto::{
++    Attr, Dec, Qid, StatFs, GETATTR_BASIC, IOHDR, NOFID, TATTACH, TCLUNK, TGETATTR, TLOPEN,
++    TREAD, TREADDIR, TREADLINK, TSTATFS, TVERSION, TWALK, VERSION_9P2000_L,
++};
++use crate::transport::Channel;
++use core::sync::atomic::{AtomicU32, Ordering};
++use kernel::{prelude::*, sync::Arc};
++
++/// Connection parameters.
++pub(crate) struct Options<'a> {
++    pub(crate) tag: &'a [u8],
++    pub(crate) msize: u32,
++    pub(crate) uname: &'a [u8],
++    pub(crate) aname: &'a [u8],
++    pub(crate) uid: u32,
++}
++
++/// An attached 9P session.
++pub(crate) struct Session {
++    chan: Arc<Channel>,
++    msize: u32,
++    root_fid: u32,
++    next_fid: AtomicU32,
++}
++
++impl Session {
++    /// Claims the channel, negotiates the protocol version and attaches.
++    pub(crate) fn connect(opts: &Options<'_>) -> Result<Self> {
++        let chan = Channel::claim(opts.tag, opts.msize)?;
++        let res = (|| {
++            let msize = chan.rpc(
++                TVERSION,
++                |e| {
++                    e.u32(opts.msize)?;
++                    e.str(VERSION_9P2000_L)
++                },
++                |d| {
++                    let msize = d.u32()?;
++                    if d.str()? != VERSION_9P2000_L {
++                        return Err(EPROTONOSUPPORT);
++                    }
++                    Ok(msize)
++                },
++            )?;
++            if msize < 4096 || msize > opts.msize {
++                return Err(EREMOTEIO);
++            }
++            chan.set_msize(msize);
++            let root_fid = 0;
++            chan.rpc(
++                TATTACH,
++                |e| {
++                    e.u32(root_fid)?;
++                    e.u32(NOFID)?;
++                    e.str(opts.uname)?;
++                    e.str(opts.aname)?;
++                    e.u32(opts.uid)
++                },
++                |d| d.qid().map(|_| ()),
++            )?;
++            Ok((msize, root_fid))
++        })();
++        match res {
++            Ok((msize, root_fid)) => Ok(Self {
++                chan,
++                msize,
++                root_fid,
++                next_fid: AtomicU32::new(root_fid + 1),
++            }),
++            Err(e) => {
++                chan.release();
++                Err(e)
++            }
++        }
++    }
++
++    pub(crate) fn root_fid(&self) -> u32 {
++        self.root_fid
++    }
++
++    /// Largest payload of a single read or readdir reply.
++    pub(crate) fn max_io(&self) -> u32 {
++        self.msize - IOHDR
++    }
++
++    fn alloc_fid(&self) -> Result<u32> {
++        let fid = self.next_fid.fetch_add(1, Ordering::Relaxed);
++        if fid == NOFID {
++            return Err(EMFILE);
++        }
++        Ok(fid)
++    }
++
++    /// Walks from `fid` through at most one path element, returning a new fid.
++    ///
++    /// With no element this clones `fid`. A missing element is `ENOENT`.
++    pub(crate) fn walk(&self, fid: u32, name: Option<&[u8]>) -> Result<u32> {
++        let newfid = self.alloc_fid()?;
++        let nwname: u16 = if name.is_some() { 1 } else { 0 };
++        let nwqid = self.chan.rpc(
++            TWALK,
++            |e| {
++                e.u32(fid)?;
++                e.u32(newfid)?;
++                e.u16(nwname)?;
++                if let Some(n) = name {
++                    e.str(n)?;
++                }
++                Ok(())
++            },
++            |d| {
++                let n = d.u16()?;
++                for _ in 0..n {
++                    d.qid()?;
++                }
++                Ok(n)
++            },
++        )?;
++        if nwqid != nwname {
++            // A partial walk does not create `newfid`.
++            return Err(ENOENT);
++        }
++        Ok(newfid)
++    }
++
++    pub(crate) fn getattr(&self, fid: u32) -> Result<Attr> {
++        self.chan.rpc(
++            TGETATTR,
++            |e| {
++                e.u32(fid)?;
++                e.u64(GETATTR_BASIC)
++            },
++            Attr::decode,
++        )
++    }
++
++    /// Opens `fid` with Linux open `flags`; returns the qid and the server's `iounit`.
++    pub(crate) fn lopen(&self, fid: u32, flags: u32) -> Result<(Qid, u32)> {
++        self.chan.rpc(
++            TLOPEN,
++            |e| {
++                e.u32(fid)?;
++                e.u32(flags)
++            },
++            |d| Ok((d.qid()?, d.u32()?)),
++        )
++    }
++
++    fn read_into(&self, typ: u8, fid: u32, offset: u64, out: &mut [u8]) -> Result<usize> {
++        let count = u32::try_from(out.len()).unwrap_or(u32::MAX).min(self.max_io());
++        self.chan.rpc(
++            typ,
++            |e| {
++                e.u32(fid)?;
++                e.u64(offset)?;
++                e.u32(count)
++            },
++            |d: &mut Dec<'_>| {
++                let n = d.u32()? as usize;
++                if n > count as usize || n > d.remaining() {
++                    return Err(EIO);
++                }
++                out[..n].copy_from_slice(d.bytes(n)?);
++                Ok(n)
++            },
++        )
++    }
++
++    /// Reads file data at `offset` into `out`; returns the byte count (0 at end of file).
++    pub(crate) fn read(&self, fid: u32, offset: u64, out: &mut [u8]) -> Result<usize> {
++        self.read_into(TREAD, fid, offset, out)
++    }
++
++    /// Reads packed directory entries starting after server cookie `offset`.
++    pub(crate) fn readdir(&self, fid: u32, offset: u64, out: &mut [u8]) -> Result<usize> {
++        self.read_into(TREADDIR, fid, offset, out)
++    }
++
++    pub(crate) fn readlink(&self, fid: u32) -> Result<KVec<u8>> {
++        self.chan.rpc(
++            TREADLINK,
++            |e| e.u32(fid),
++            |d| {
++                let s = d.str()?;
++                let mut v = KVec::with_capacity(s.len(), GFP_KERNEL)?;
++                v.extend_from_slice(s, GFP_KERNEL)?;
++                Ok(v)
++            },
++        )
++    }
++
++    pub(crate) fn statfs(&self, fid: u32) -> Result<StatFs> {
++        self.chan.rpc(TSTATFS, |e| e.u32(fid), StatFs::decode)
++    }
++
++    /// Releases `fid` on the server. Errors are ignored: the fid is gone either way.
++    pub(crate) fn clunk(&self, fid: u32) {
++        let _ = self.chan.rpc(TCLUNK, |e| e.u32(fid), |_| Ok(()));
++    }
++}
++
++impl Drop for Session {
++    fn drop(&mut self) {
++        self.clunk(self.root_fid);
++        self.chan.release();
++    }
++}
+diff --git a/fs/r9fs/proto.rs b/fs/r9fs/proto.rs
+new file mode 100644
+index 000000000..33060ea9c
+--- /dev/null
++++ b/fs/r9fs/proto.rs
+@@ -0,0 +1,229 @@
++// SPDX-License-Identifier: GPL-2.0
++
++//! 9P2000.L wire encoding.
++//!
++//! Messages are `size[4] type[1] tag[2] body`, little endian; strings are `len[2] bytes`.
++
++use kernel::prelude::*;
++
++pub(crate) const VERSION_9P2000_L: &[u8] = b"9P2000.L";
++pub(crate) const HDR: usize = 7;
++/// Room reserved for the header of an `Rread`/`Rreaddir` reply (`size type tag count`).
++pub(crate) const IOHDR: u32 = 11;
++pub(crate) const NOTAG: u16 = 0xffff;
++pub(crate) const NOFID: u32 = 0xffff_ffff;
++
++pub(crate) const RLERROR: u8 = 7;
++pub(crate) const TSTATFS: u8 = 8;
++pub(crate) const TLOPEN: u8 = 12;
++pub(crate) const TREADLINK: u8 = 22;
++pub(crate) const TGETATTR: u8 = 24;
++pub(crate) const TREADDIR: u8 = 40;
++pub(crate) const TVERSION: u8 = 100;
++pub(crate) const TATTACH: u8 = 104;
++pub(crate) const TWALK: u8 = 110;
++pub(crate) const TREAD: u8 = 116;
++pub(crate) const TCLUNK: u8 = 120;
++
++pub(crate) const GETATTR_BASIC: u64 = 0x0000_07ff;
++
++/// A server file identity.
++#[derive(Clone, Copy, Default)]
++pub(crate) struct Qid {
++    pub(crate) path: u64,
++}
++
++/// Writes a message body into a fixed-size buffer.
++pub(crate) struct Enc<'a> {
++    buf: &'a mut [u8],
++    pos: usize,
++}
++
++impl<'a> Enc<'a> {
++    pub(crate) fn new(buf: &'a mut [u8], pos: usize) -> Self {
++        Self { buf, pos }
++    }
++
++    pub(crate) fn pos(&self) -> usize {
++        self.pos
++    }
++
++    fn put(&mut self, bytes: &[u8]) -> Result {
++        let end = self.pos.checked_add(bytes.len()).ok_or(EINVAL)?;
++        self.buf
++            .get_mut(self.pos..end)
++            .ok_or(ENOSPC)?
++            .copy_from_slice(bytes);
++        self.pos = end;
++        Ok(())
++    }
++
++    pub(crate) fn u16(&mut self, v: u16) -> Result {
++        self.put(&v.to_le_bytes())
++    }
++
++    pub(crate) fn u32(&mut self, v: u32) -> Result {
++        self.put(&v.to_le_bytes())
++    }
++
++    pub(crate) fn u64(&mut self, v: u64) -> Result {
++        self.put(&v.to_le_bytes())
++    }
++
++    pub(crate) fn str(&mut self, s: &[u8]) -> Result {
++        self.u16(u16::try_from(s.len()).map_err(|_| ENAMETOOLONG)?)?;
++        self.put(s)
++    }
++}
++
++/// Reads a message body; every short read is reported as `EIO` (a protocol error).
++pub(crate) struct Dec<'a> {
++    buf: &'a [u8],
++    pos: usize,
++}
++
++impl<'a> Dec<'a> {
++    pub(crate) fn new(buf: &'a [u8]) -> Self {
++        Self { buf, pos: 0 }
++    }
++
++    pub(crate) fn remaining(&self) -> usize {
++        self.buf.len() - self.pos
++    }
++
++    pub(crate) fn bytes(&mut self, n: usize) -> Result<&'a [u8]> {
++        let end = self.pos.checked_add(n).ok_or(EIO)?;
++        let s = self.buf.get(self.pos..end).ok_or(EIO)?;
++        self.pos = end;
++        Ok(s)
++    }
++
++    fn arr<const N: usize>(&mut self) -> Result<[u8; N]> {
++        let mut a = [0u8; N];
++        a.copy_from_slice(self.bytes(N)?);
++        Ok(a)
++    }
++
++    pub(crate) fn u8(&mut self) -> Result<u8> {
++        Ok(self.arr::<1>()?[0])
++    }
++
++    pub(crate) fn u16(&mut self) -> Result<u16> {
++        Ok(u16::from_le_bytes(self.arr()?))
++    }
++
++    pub(crate) fn u32(&mut self) -> Result<u32> {
++        Ok(u32::from_le_bytes(self.arr()?))
++    }
++
++    pub(crate) fn u64(&mut self) -> Result<u64> {
++        Ok(u64::from_le_bytes(self.arr()?))
++    }
++
++    pub(crate) fn str(&mut self) -> Result<&'a [u8]> {
++        let n = self.u16()?;
++        self.bytes(n.into())
++    }
++
++    pub(crate) fn qid(&mut self) -> Result<Qid> {
++        let _typ = self.u8()?;
++        let _version = self.u32()?;
++        Ok(Qid { path: self.u64()? })
++    }
++}
++
++/// `Rgetattr` fields used by the client.
++#[derive(Clone, Copy, Default)]
++pub(crate) struct Attr {
++    pub(crate) qid: Qid,
++    pub(crate) mode: u32,
++    pub(crate) uid: u32,
++    pub(crate) gid: u32,
++    pub(crate) nlink: u64,
++    pub(crate) rdev: u64,
++    pub(crate) size: u64,
++    pub(crate) blocks: u64,
++    pub(crate) atime: (u64, u64),
++    pub(crate) mtime: (u64, u64),
++    pub(crate) ctime: (u64, u64),
++}
++
++impl Attr {
++    pub(crate) fn decode(d: &mut Dec<'_>) -> Result<Self> {
++        let _valid = d.u64()?;
++        let qid = d.qid()?;
++        let mode = d.u32()?;
++        let uid = d.u32()?;
++        let gid = d.u32()?;
++        let nlink = d.u64()?;
++        let rdev = d.u64()?;
++        let size = d.u64()?;
++        let _blksize = d.u64()?;
++        let blocks = d.u64()?;
++        let atime = (d.u64()?, d.u64()?);
++        let mtime = (d.u64()?, d.u64()?);
++        let ctime = (d.u64()?, d.u64()?);
++        Ok(Self {
++            qid,
++            mode,
++            uid,
++            gid,
++            nlink,
++            rdev,
++            size,
++            blocks,
++            atime,
++            mtime,
++            ctime,
++        })
++    }
++}
++
++/// One `Rreaddir` entry.
++pub(crate) struct Dirent<'a> {
++    pub(crate) qid: Qid,
++    pub(crate) offset: u64,
++    pub(crate) typ: u8,
++    pub(crate) name: &'a [u8],
++}
++
++impl<'a> Dirent<'a> {
++    pub(crate) fn decode(d: &mut Dec<'a>) -> Result<Self> {
++        Ok(Self {
++            qid: d.qid()?,
++            offset: d.u64()?,
++            typ: d.u8()?,
++            name: d.str()?,
++        })
++    }
++}
++
++/// `Rstatfs` fields.
++#[derive(Clone, Copy, Default)]
++pub(crate) struct StatFs {
++    pub(crate) typ: u32,
++    pub(crate) bsize: u32,
++    pub(crate) blocks: u64,
++    pub(crate) bfree: u64,
++    pub(crate) bavail: u64,
++    pub(crate) files: u64,
++    pub(crate) ffree: u64,
++    pub(crate) fsid: u64,
++    pub(crate) namelen: u32,
++}
++
++impl StatFs {
++    pub(crate) fn decode(d: &mut Dec<'_>) -> Result<Self> {
++        Ok(Self {
++            typ: d.u32()?,
++            bsize: d.u32()?,
++            blocks: d.u64()?,
++            bfree: d.u64()?,
++            bavail: d.u64()?,
++            files: d.u64()?,
++            ffree: d.u64()?,
++            fsid: d.u64()?,
++            namelen: d.u32()?,
++        })
++    }
++}
+diff --git a/fs/r9fs/r9fs.rs b/fs/r9fs/r9fs.rs
+new file mode 100644
+index 000000000..357f4ec4d
+--- /dev/null
++++ b/fs/r9fs/r9fs.rs
+@@ -0,0 +1,305 @@
++// SPDX-License-Identifier: GPL-2.0
++
++//! r9fs: a read-only 9P2000.L file system over virtio, written in Rust.
++//!
++//! Mount with `mount -t r9fs <tag> <dir> [-o aname=..,uname=..,uid=..,msize=..]`.
++//! Every lookup, open and directory read goes to the server; nothing is cached.
++
++mod client;
++mod proto;
++mod transport;
++
++use client::{Options, Session};
++use kernel::{
++    fs::{
++        self, inode::Either, DirEmitter, FileSystem, INode, INodeParams, INodeType, MountParams,
++        NewSuperBlock, Stat, SuperBlock, Timespec,
++    },
++    iov::IovIterDest,
++    prelude::*,
++    sync::aref::ARef,
++    virtio,
++};
++use proto::{Attr, Dec, Dirent};
++
++module! {
++    type: R9fsModule,
++    name: "r9fs",
++    authors: ["v9fs"],
++    description: "Rust 9P2000.L file system over virtio (read-only)",
++    license: "GPL",
++    alias: ["fs-r9fs"],
++}
++
++const V9FS_MAGIC: u64 = 0x0102_1997;
++const DEFAULT_MSIZE: u32 = 128 * 1024;
++const MAX_MSIZE: u32 = 1024 * 1024;
++
++#[pin_data]
++struct R9fsModule {
++    #[pin]
++    fs: fs::Registration<R9fs>,
++    #[pin]
++    virtio: virtio::Registration<transport::Driver>,
++}
++
++impl kernel::InPlaceModule for R9fsModule {
++    fn init(module: &'static ThisModule) -> impl PinInit<Self, Error> {
++        // SAFETY: Called once, before the driver that uses the channel list is registered.
++        unsafe { transport::CHANNELS.init() };
++        try_pin_init!(Self {
++            fs <- fs::Registration::new(module),
++            virtio <- virtio::Registration::new(module),
++        })
++    }
++}
++
++/// Per-inode data: a fid walked to this file.
++struct InodeData {
++    fid: u32,
++}
++
++/// Per-open-file data: a fid opened with `Tlopen`.
++struct OpenFile {
++    fid: u32,
++    iounit: u32,
++}
++
++struct R9fs;
++
++fn parse_u32(v: Option<&[u8]>) -> Result<u32> {
++    core::str::from_utf8(v.ok_or(EINVAL)?)
++        .map_err(|_| EINVAL)?
++        .parse()
++        .map_err(|_| EINVAL)
++}
++
++/// Converts a Linux `new_encode_dev` value to a kernel `dev_t`.
++fn decode_dev(rdev: u64) -> u32 {
++    let major = ((rdev & 0xfff00) >> 8) as u32;
++    let minor = ((rdev & 0xff) | ((rdev >> 12) & 0xfff00)) as u32;
++    (major << 20) | minor
++}
++
++fn ts((sec, nsec): (u64, u64)) -> Timespec {
++    Timespec {
++        sec: sec as i64,
++        nsec: nsec.min(999_999_999) as u32,
++    }
++}
++
++fn inode_type(attr: &Attr) -> Result<INodeType> {
++    Ok(match attr.mode & 0o170000 {
++        0o040000 => INodeType::Dir,
++        0o100000 => INodeType::Reg,
++        0o120000 => INodeType::Lnk,
++        0o020000 => INodeType::Chr(decode_dev(attr.rdev)),
++        0o060000 => INodeType::Blk(decode_dev(attr.rdev)),
++        0o010000 => INodeType::Fifo,
++        0o140000 => INodeType::Sock,
++        _ => return Err(EIO),
++    })
++}
++
++/// Returns the inode for `fid`, consuming `fid`: it becomes the inode's fid if the inode is new
++/// and is clunked otherwise.
++fn make_inode(sb: &SuperBlock<R9fs>, fid: u32) -> Result<ARef<INode<R9fs>>> {
++    let session = sb.data();
++    let attr = match session.getattr(fid) {
++        Ok(a) => a,
++        Err(e) => {
++            session.clunk(fid);
++            return Err(e);
++        }
++    };
++    let typ = match inode_type(&attr) {
++        Ok(t) => t,
++        Err(e) => {
++            session.clunk(fid);
++            return Err(e);
++        }
++    };
++    match sb.get_or_create_inode(attr.qid.path) {
++        Ok(Either::Existing(inode)) => {
++            session.clunk(fid);
++            Ok(inode)
++        }
++        Ok(Either::New(new)) => new.init(INodeParams {
++            typ,
++            mode: (attr.mode & 0o7777) as u16,
++            size: attr.size.min(i64::MAX as u64) as i64,
++            blocks: attr.blocks,
++            nlink: attr.nlink.min(u32::MAX.into()) as u32,
++            uid: attr.uid,
++            gid: attr.gid,
++            atime: ts(attr.atime),
++            mtime: ts(attr.mtime),
++            ctime: ts(attr.ctime),
++            value: InodeData { fid },
++        }),
++        Err(e) => {
++            session.clunk(fid);
++            Err(e)
++        }
++    }
++}
++
++impl FileSystem for R9fs {
++    const NAME: &'static CStr = c"r9fs";
++    type Data = KBox<Session>;
++    type INodeData = InodeData;
++    type FileData = KBox<OpenFile>;
++
++    fn fill_super(sb: &mut NewSuperBlock<'_, Self>, params: &MountParams) -> Result<KBox<Session>> {
++        let mut opts = Options {
++            tag: params.source().ok_or(EINVAL)?,
++            msize: DEFAULT_MSIZE,
++            uname: b"root",
++            aname: b"",
++            uid: 0,
++        };
++        for key in params.keys() {
++            let val = params.get(key).flatten();
++            match key {
++                b"msize" => opts.msize = parse_u32(val)?.clamp(4096, MAX_MSIZE),
++                b"uname" => opts.uname = val.ok_or(EINVAL)?,
++                b"aname" => opts.aname = val.ok_or(EINVAL)?,
++                b"uid" => opts.uid = parse_u32(val)?,
++                b"trans" if val == Some(b"virtio") => {}
++                b"version" if val == Some(b"9p2000.L") => {}
++                _ => {
++                    pr_err!("unsupported mount option\n");
++                    return Err(EINVAL);
++                }
++            }
++        }
++        sb.set_magic(V9FS_MAGIC)
++            .set_blocksize_bits(12)
++            .set_read_only();
++        Ok(KBox::new(Session::connect(&opts)?, GFP_KERNEL)?)
++    }
++
++    fn init_root(sb: &SuperBlock<Self>) -> Result<ARef<INode<Self>>> {
++        let session = sb.data();
++        let fid = session.walk(session.root_fid(), None)?;
++        make_inode(sb, fid)
++    }
++
++    fn lookup(parent: &INode<Self>, name: &[u8]) -> Result<Option<ARef<INode<Self>>>> {
++        let sb = parent.super_block();
++        match sb.data().walk(parent.data().fid, Some(name)) {
++            Ok(fid) => make_inode(sb, fid).map(Some),
++            Err(e) if e == ENOENT => Ok(None),
++            Err(e) => Err(e),
++        }
++    }
++
++    fn open(inode: &INode<Self>, _flags: u32) -> Result<KBox<OpenFile>> {
++        let session = inode.super_block().data();
++        let fid = session.walk(inode.data().fid, None)?;
++        // Read-only mount: always open for reading (`O_RDONLY`).
++        match session.lopen(fid, 0) {
++            Ok((_, iounit)) => Ok(KBox::new(OpenFile { fid, iounit }, GFP_KERNEL)?),
++            Err(e) => {
++                session.clunk(fid);
++                Err(e)
++            }
++        }
++    }
++
++    fn release(inode: &INode<Self>, file: KBox<OpenFile>) {
++        inode.super_block().data().clunk(file.fid);
++    }
++
++    fn read(
++        inode: &INode<Self>,
++        file: &OpenFile,
++        mut pos: i64,
++        buf: &mut IovIterDest<'_>,
++    ) -> Result<usize> {
++        let session = inode.super_block().data();
++        let mut chunk = session.max_io();
++        if file.iounit != 0 {
++            chunk = chunk.min(file.iounit);
++        }
++        let want = buf.len().min(chunk as usize);
++        if want == 0 {
++            return Ok(0);
++        }
++        let mut bounce = KVec::from_elem(0u8, want, GFP_KERNEL)?;
++        let mut total = 0usize;
++        while !buf.is_empty() {
++            let len = buf.len().min(want);
++            let off = u64::try_from(pos).map_err(|_| EINVAL)?;
++            let n = match session.read(file.fid, off, &mut bounce[..len]) {
++                Ok(n) => n,
++                Err(e) if total == 0 => return Err(e),
++                Err(_) => break,
++            };
++            if n == 0 {
++                break;
++            }
++            let copied = buf.copy_to_iter(&bounce[..n]);
++            total += copied;
++            pos += copied as i64;
++            if copied < n {
++                if total == 0 {
++                    return Err(EFAULT);
++                }
++                break;
++            }
++            if n < len {
++                break;
++            }
++        }
++        Ok(total)
++    }
++
++    fn read_dir(inode: &INode<Self>, file: &OpenFile, emitter: &mut DirEmitter) -> Result {
++        let session = inode.super_block().data();
++        let mut buf = KVec::from_elem(0u8, session.max_io() as usize, GFP_KERNEL)?;
++        loop {
++            let off = u64::try_from(emitter.pos()).map_err(|_| EINVAL)?;
++            let n = session.readdir(file.fid, off, &mut buf)?;
++            if n == 0 {
++                return Ok(());
++            }
++            let mut d = Dec::new(&buf[..n]);
++            while d.remaining() > 0 {
++                let ent = Dirent::decode(&mut d)?;
++                if !emitter.emit(ent.name, ent.qid.path, ent.typ.into()) {
++                    return Ok(());
++                }
++                emitter.set_pos(i64::try_from(ent.offset).map_err(|_| EIO)?);
++            }
++            if emitter.pos() as u64 == off {
++                // The server returned entries without advancing its cookie.
++                return Err(EIO);
++            }
++        }
++    }
++
++    fn get_link(inode: &INode<Self>) -> Result<KVec<u8>> {
++        inode.super_block().data().readlink(inode.data().fid)
++    }
++
++    fn statfs(sb: &SuperBlock<Self>) -> Result<Stat> {
++        let session = sb.data();
++        let st = session.statfs(session.root_fid())?;
++        Ok(Stat {
++            magic: st.typ.into(),
++            bsize: st.bsize.into(),
++            blocks: st.blocks,
++            bfree: st.bfree,
++            bavail: st.bavail,
++            files: st.files,
++            ffree: st.ffree,
++            fsid: st.fsid,
++            namelen: st.namelen.into(),
++        })
++    }
++
++    fn evict(sb: &SuperBlock<Self>, data: InodeData) {
++        sb.data().clunk(data.fid);
++    }
++}
+diff --git a/fs/r9fs/transport.rs b/fs/r9fs/transport.rs
+new file mode 100644
+index 000000000..46b76e50c
+--- /dev/null
++++ b/fs/r9fs/transport.rs
+@@ -0,0 +1,208 @@
++// SPDX-License-Identifier: GPL-2.0
++
++//! virtio-9p transport.
++//!
++//! Each virtio-9p device is a [`Channel`] identified by its mount tag. A channel serves one
++//! mount at a time and carries one request at a time: the channel mutex is held from
++//! submission until the reply is consumed, so a single tag suffices and the virtqueue is never
++//! accessed concurrently.
++
++use crate::proto::{Dec, Enc, HDR, NOTAG, RLERROR, TVERSION};
++use core::ptr::NonNull;
++use kernel::{
++    new_mutex,
++    prelude::*,
++    sync::{Arc, ArcBorrow, Completion, Mutex},
++    virtio::{self, Device, DeviceId, VirtQueue},
++};
++
++const VIRTIO_ID_9P: u32 = 9;
++const VIRTIO_9P_MOUNT_TAG: u32 = 0;
++/// Offsets in `struct virtio_9p_config`.
++const CFG_TAG_LEN: u32 = 0;
++const CFG_TAG: u32 = 2;
++
++kernel::sync::global_lock! {
++    // SAFETY: Initialised in module init before the driver is registered.
++    pub(crate) unsafe(uninit) static CHANNELS: Mutex<KVec<Arc<Channel>>> = KVec::new();
++}
++
++struct State {
++    /// Set by device removal; the virtqueue must not be touched afterwards.
++    dead: bool,
++    /// A mount currently owns the channel.
++    in_use: bool,
++    tbuf: KVec<u8>,
++    rbuf: KVec<u8>,
++}
++
++/// A virtio-9p device.
++#[pin_data]
++pub(crate) struct Channel {
++    tag: KVec<u8>,
++    vq: VirtQueue,
++    #[pin]
++    state: Mutex<State>,
++    #[pin]
++    done: Completion,
++}
++
++impl Channel {
++    /// Claims the channel whose mount tag is `tag` for a mount, with buffers of `msize` bytes.
++    pub(crate) fn claim(tag: &[u8], msize: u32) -> Result<Arc<Channel>> {
++        let chans = CHANNELS.lock();
++        let chan = chans
++            .iter()
++            .find(|c| c.tag.as_slice() == tag)
++            .ok_or(ENOENT)?
++            .clone();
++        drop(chans);
++
++        let mut st = chan.state.lock();
++        if st.dead {
++            return Err(ENODEV);
++        }
++        if st.in_use {
++            return Err(EBUSY);
++        }
++        st.tbuf = KVec::from_elem(0u8, msize as usize, GFP_KERNEL)?;
++        st.rbuf = KVec::from_elem(0u8, msize as usize, GFP_KERNEL)?;
++        st.in_use = true;
++        drop(st);
++        Ok(chan)
++    }
++
++    /// Releases a claim and frees the request buffers.
++    pub(crate) fn release(&self) {
++        let mut st = self.state.lock();
++        st.in_use = false;
++        st.tbuf = KVec::new();
++        st.rbuf = KVec::new();
++    }
++
++    /// Shrinks the buffers after version negotiation lowered `msize`.
++    pub(crate) fn set_msize(&self, msize: u32) {
++        let mut st = self.state.lock();
++        st.tbuf.truncate(msize as usize);
++        st.rbuf.truncate(msize as usize);
++    }
++
++    /// Sends a `typ` request whose body `enc` writes and decodes the reply body with `dec`.
++    ///
++    /// `Rlerror` replies become the server's errno; any other reply type than `typ + 1`, a tag
++    /// mismatch, or a malformed reply is `EIO`.
++    pub(crate) fn rpc<R>(
++        &self,
++        typ: u8,
++        enc: impl FnOnce(&mut Enc<'_>) -> Result,
++        dec: impl FnOnce(&mut Dec<'_>) -> Result<R>,
++    ) -> Result<R> {
++        let mut guard = self.state.lock();
++        let st = &mut *guard;
++        if st.dead {
++            return Err(EIO);
++        }
++        let tag = if typ == TVERSION { NOTAG } else { 0 };
++
++        let mut e = Enc::new(&mut st.tbuf, HDR);
++        enc(&mut e)?;
++        let size = e.pos();
++        st.tbuf[0..4].copy_from_slice(&(size as u32).to_le_bytes());
++        st.tbuf[4] = typ;
++        st.tbuf[5..7].copy_from_slice(&tag.to_le_bytes());
++
++        let token = NonNull::from(&mut st.tbuf[0]).cast();
++        self.done.reinit();
++        // SAFETY: The queue is live (`!dead`) and serialised by the channel mutex. Both buffers
++        // are `kmalloc` memory owned by `State`, which is neither touched nor freed while the
++        // mutex is held, and the request is reaped below before the mutex is released.
++        let len = unsafe {
++            self.vq.add_buf(&st.tbuf[..size], &mut st.rbuf, token)?;
++            if !self.vq.kick() {
++                st.dead = true;
++                return Err(EIO);
++            }
++            loop {
++                self.done.wait_for_completion();
++                if let Some((_, len)) = self.vq.get_buf() {
++                    break len as usize;
++                }
++            }
++        };
++
++        let reply = st.rbuf.get(..len).ok_or(EIO)?;
++        let mut d = Dec::new(reply);
++        let rsize = d.u32()? as usize;
++        let rtype = d.u8()?;
++        let rtag = d.u16()?;
++        if rsize < HDR || rsize > len || rtag != tag {
++            return Err(EIO);
++        }
++        let mut body = Dec::new(&reply[HDR..rsize]);
++        if rtype == RLERROR {
++            let ecode = body.u32()?;
++            return Err(i32::try_from(ecode)
++                .ok()
++                .filter(|e| (1..4096).contains(e))
++                .map(|e| Error::from_errno(-e))
++                .unwrap_or(EIO));
++        }
++        if rtype != typ + 1 {
++            return Err(EIO);
++        }
++        dec(&mut body)
++    }
++}
++
++/// The virtio driver for 9P devices.
++pub(crate) struct Driver;
++
++impl virtio::Driver for Driver {
++    type Data = Arc<Channel>;
++    const NAME: &'static CStr = c"r9fs_virtio";
++    const ID_TABLE: &'static [DeviceId] = &[virtio::device_id(VIRTIO_ID_9P), virtio::DEVICE_ID_END];
++    const FEATURES: &'static [u32] = &[VIRTIO_9P_MOUNT_TAG];
++
++    fn probe(dev: &Device) -> Result<Arc<Channel>> {
++        if !dev.has_config_get() || !dev.has_feature(VIRTIO_9P_MOUNT_TAG) {
++            return Err(EINVAL);
++        }
++        let vq = dev.find_single_vq::<Self>(c"requests")?;
++        let tag_len = dev.cread16(CFG_TAG_LEN);
++        let mut tag = KVec::from_elem(0u8, tag_len.into(), GFP_KERNEL)?;
++        dev.cread_bytes(CFG_TAG, &mut tag);
++        Arc::pin_init(
++            pin_init!(Channel {
++                tag,
++                vq,
++                state <- new_mutex!(State {
++                    dead: false,
++                    in_use: false,
++                    tbuf: KVec::new(),
++                    rbuf: KVec::new(),
++                }),
++                done <- Completion::new(),
++            }),
++            GFP_KERNEL,
++        )
++    }
++
++    fn post_probe(dev: &Device, chan: ArcBorrow<'_, Channel>) -> Result {
++        dev.ready();
++        CHANNELS.lock().push(chan.into(), GFP_KERNEL)?;
++        Ok(())
++    }
++
++    fn remove(_dev: &Device, chan: ArcBorrow<'_, Channel>) {
++        let mut chans = CHANNELS.lock();
++        if let Some(i) = chans.iter().position(|c| core::ptr::eq(&**c, &*chan)) {
++            drop(chans.remove(i));
++        }
++        drop(chans);
++        chan.state.lock().dead = true;
++    }
++
++    fn vq_done(chan: ArcBorrow<'_, Channel>) {
++        chan.done.complete();
++    }
++}
+-- 
+2.43.0
+

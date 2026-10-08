@@ -1,0 +1,134 @@
+From 8bc7d277f5d6d6d93ac30abd0a90037fa4d66d84 Mon Sep 17 00:00:00 2001
+From: Cursor Agent <cursoragent@cursor.com>
+Date: Thu, 8 Oct 2026 16:34:27 +0000
+Subject: [PATCH 8/9] rust: fs, virtio; fs: r9fs: apply rustfmt
+
+No functional change.
+---
+ fs/r9fs/client.rs            |  8 +++++---
+ fs/r9fs/r9fs.rs              |  3 +--
+ rust/kernel/fs.rs            |  4 +++-
+ rust/kernel/fs/filesystem.rs |  4 +++-
+ rust/kernel/fs/inode.rs      |  5 ++++-
+ rust/kernel/virtio.rs        | 14 ++------------
+ 6 files changed, 18 insertions(+), 20 deletions(-)
+
+diff --git a/fs/r9fs/client.rs b/fs/r9fs/client.rs
+index 390f3b7c8..75464523c 100644
+--- a/fs/r9fs/client.rs
++++ b/fs/r9fs/client.rs
+@@ -3,8 +3,8 @@
+ //! 9P2000.L client session over one [`Channel`].
+ 
+ use crate::proto::{
+-    Attr, Dec, Qid, StatFs, GETATTR_BASIC, IOHDR, NOFID, TATTACH, TGETATTR, TLOPEN,
+-    TREAD, TREADDIR, TREADLINK, TSTATFS, TVERSION, TWALK, VERSION_9P2000_L,
++    Attr, Dec, Qid, StatFs, GETATTR_BASIC, IOHDR, NOFID, TATTACH, TGETATTR, TLOPEN, TREAD,
++    TREADDIR, TREADLINK, TSTATFS, TVERSION, TWALK, VERSION_9P2000_L,
+ };
+ use crate::transport::Channel;
+ use core::sync::atomic::{AtomicU32, Ordering};
+@@ -156,7 +156,9 @@ pub(crate) fn lopen(&self, fid: u32, flags: u32) -> Result<(Qid, u32)> {
+     }
+ 
+     fn read_into(&self, typ: u8, fid: u32, offset: u64, out: &mut [u8]) -> Result<usize> {
+-        let count = u32::try_from(out.len()).unwrap_or(u32::MAX).min(self.max_io());
++        let count = u32::try_from(out.len())
++            .unwrap_or(u32::MAX)
++            .min(self.max_io());
+         self.chan.rpc(
+             typ,
+             |e| {
+diff --git a/fs/r9fs/r9fs.rs b/fs/r9fs/r9fs.rs
+index 8a108bf45..993d02e05 100644
+--- a/fs/r9fs/r9fs.rs
++++ b/fs/r9fs/r9fs.rs
+@@ -173,8 +173,7 @@ fn fill_super(sb: &mut NewSuperBlock<'_, Self>, params: &MountParams) -> Result<
+                 }
+             }
+         }
+-        sb.set_magic(V9FS_MAGIC)
+-            .set_blocksize_bits(12);
++        sb.set_magic(V9FS_MAGIC).set_blocksize_bits(12);
+         Ok(KBox::new(Session::connect(&opts)?, GFP_KERNEL)?)
+     }
+ 
+diff --git a/rust/kernel/fs.rs b/rust/kernel/fs.rs
+index 30e655e9a..c966e9214 100644
+--- a/rust/kernel/fs.rs
++++ b/rust/kernel/fs.rs
+@@ -12,5 +12,7 @@
+ 
+ pub mod filesystem;
+ pub mod inode;
+-pub use self::filesystem::{FileSystem, MountParams, NewSuperBlock, Registration, Stat, SuperBlock};
++pub use self::filesystem::{
++    FileSystem, MountParams, NewSuperBlock, Registration, Stat, SuperBlock,
++};
+ pub use self::inode::{DirEmitter, INode, INodeParams, INodeType, NewINode, Timespec};
+diff --git a/rust/kernel/fs/filesystem.rs b/rust/kernel/fs/filesystem.rs
+index 2e91755d9..3e1325f4e 100644
+--- a/rust/kernel/fs/filesystem.rs
++++ b/rust/kernel/fs/filesystem.rs
+@@ -333,7 +333,9 @@ impl<T: FileSystem> Tables<T> {
+             // SAFETY: `fs_private` was set in `init_fs_context` and is exclusively accessed
+             // during parameter parsing.
+             let params = unsafe { &mut *(*fc).fs_private.cast::<MountParams>() };
+-            params.params.push((copy_bytes(key.to_bytes())?, value), GFP_KERNEL)?;
++            params
++                .params
++                .push((copy_bytes(key.to_bytes())?, value), GFP_KERNEL)?;
+             Ok(())
+         })();
+         match res {
+diff --git a/rust/kernel/fs/inode.rs b/rust/kernel/fs/inode.rs
+index ac7f6a0cc..02f233605 100644
+--- a/rust/kernel/fs/inode.rs
++++ b/rust/kernel/fs/inode.rs
+@@ -369,7 +369,10 @@ impl<T: FileSystem> Tables<T> {
+         // SAFETY: The dentry and its name are valid and stable during lookup.
+         let name = unsafe {
+             let qstr = &(*dentry).__bindgen_anon_1.d_name;
+-            core::slice::from_raw_parts(qstr.name, qstr.__bindgen_anon_1.__bindgen_anon_1.len as usize)
++            core::slice::from_raw_parts(
++                qstr.name,
++                qstr.__bindgen_anon_1.__bindgen_anon_1.len as usize,
++            )
+         };
+         let inode = match T::lookup(parent, name) {
+             // An inode of another superblock could outlive its `s_fs_info`.
+diff --git a/rust/kernel/virtio.rs b/rust/kernel/virtio.rs
+index fe72c1424..8d7947f5b 100644
+--- a/rust/kernel/virtio.rs
++++ b/rust/kernel/virtio.rs
+@@ -75,12 +75,7 @@ pub fn has_config_get(&self) -> bool {
+     pub fn cread_bytes(&self, offset: u32, buf: &mut [u8]) {
+         // SAFETY: The device is valid and `buf` is writable for its whole length.
+         unsafe {
+-            bindings::virtio_cread_bytes(
+-                self.as_raw(),
+-                offset,
+-                buf.as_mut_ptr().cast(),
+-                buf.len(),
+-            )
++            bindings::virtio_cread_bytes(self.as_raw(), offset, buf.as_mut_ptr().cast(), buf.len())
+         }
+     }
+ 
+@@ -155,12 +150,7 @@ impl VirtQueue {
+     /// - The queue must still be live and the caller must serialise queue operations.
+     /// - Every buffer must be physically contiguous kernel memory (e.g. `kmalloc`) and stay
+     ///   valid and otherwise untouched until [`VirtQueue::get_buf`] returns `token`.
+-    pub unsafe fn add_buf(
+-        &self,
+-        out: &[u8],
+-        in_: &mut [u8],
+-        token: NonNull<c_void>,
+-    ) -> Result {
++    pub unsafe fn add_buf(&self, out: &[u8], in_: &mut [u8], token: NonNull<c_void>) -> Result {
+         let mut sg_out = core::mem::MaybeUninit::<bindings::scatterlist>::uninit();
+         let mut sg_in = core::mem::MaybeUninit::<bindings::scatterlist>::uninit();
+         let out_len = u32::try_from(out.len()).map_err(|_| EINVAL)?;
+-- 
+2.43.0
+

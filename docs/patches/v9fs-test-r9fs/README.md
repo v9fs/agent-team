@@ -20,8 +20,8 @@ git am docs/patches/v9fs-test-r9fs/000*.patch
 
 The suite runs the way the existing suites do. The guest boots the harness initrd, mounts
 the container root over C v9fs (`hostshare`) and runs the suite in the Debian chroot. The
-suite moves `r9share` and `r9slow` from `9pnet_virtio` to `r9fs_virtio`. The C v9fs view
-of the same host directory is the reference.
+suite first takes its reference from C v9fs mounting `r9share`, then moves `r9share` and
+`r9slow` from `9pnet_virtio` to `r9fs_virtio`.
 
 ## Running it
 

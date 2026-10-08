@@ -1,0 +1,121 @@
+From 0a17192a471680fe90cf13ce6e97f0762190f424 Mon Sep 17 00:00:00 2001
+From: Cursor Agent <cursoragent@cursor.com>
+Date: Thu, 8 Oct 2026 23:11:25 +0000
+Subject: [PATCH] r9fs suite: take the reference manifest from C v9fs on
+ r9share itself
+
+Harness CI's QEMU (10.0) remaps qid paths on hostshare, whose export
+spans several host devices, so inode numbers seen through hostshare
+differ from those of the single-device r9share export, regardless of
+the client. Mount r9share with the C client (same msize) before moving
+it to r9fs_virtio and take the reference manifest, statfs and checksum
+there: the same QEMU export, so the same qids.
+---
+ scripts/v9fs-r9fs-tests | 51 +++++++++++++++++++++++------------------
+ 1 file changed, 29 insertions(+), 22 deletions(-)
+
+diff --git a/scripts/v9fs-r9fs-tests b/scripts/v9fs-r9fs-tests
+index d7fca01..2d770cd 100755
+--- a/scripts/v9fs-r9fs-tests
++++ b/scripts/v9fs-r9fs-tests
+@@ -5,12 +5,12 @@
+ #   r9share  - unthrottled; differential and negative checks
+ #   r9slow   - read-throttled (qemu.bash R9FS_SLOW_BPS); kill and unbind checks
+ # At boot the built-in C 9pnet_virtio driver binds every virtio-9p device; this suite moves
+-# r9share and r9slow to r9fs_virtio. The reference for the differential is the C v9fs view of
+-# the same host directory through hostshare.
++# r9share and r9slow to r9fs_virtio. The reference for the differential is C v9fs mounting
++# r9share itself before the move: the same QEMU export, so the same qids (QEMU may remap
++# qid paths on exports that span host devices, such as hostshare).
+ set -uo pipefail
+ 
+ tmp="${R9FS_TMP:-/workspaces/tmp/r9fs}"
+-share="${R9FS_SHARE:-/workspaces/tmp/r9fs-share}"
+ logs="/home/v9fs-test/test/logs"
+ work="/workspaces/tmpdir/r9fs"
+ kmod="$tmp/v9fs-kmod"
+@@ -49,20 +49,7 @@ if [ -z "${dev_of[r9share]:-}" ] || [ -z "${dev_of[r9slow]:-}" ]; then
+   exit 1
+ fi
+ 
+-require load "$kmod" load "$tmp/r9fs.ko"
+-require registered grep -qw r9fs /proc/filesystems
+-
+-for tag in r9share r9slow; do
+-  dev="${dev_of[$tag]}"
+-  if [ -e "/sys/bus/virtio/devices/$dev/driver" ]; then
+-    echo "$dev" > "/sys/bus/virtio/devices/$dev/driver/unbind"
+-  fi
+-  echo "$dev" > /sys/bus/virtio/drivers/r9fs_virtio/bind
+-  drv="$(basename "$(readlink "/sys/bus/virtio/devices/$dev/driver")")"
+-  require "bind-$tag" [ "$drv" = r9fs_virtio ]
+-done
+-
+-# --- differential against C v9fs -------------------------------------------------------------
++# --- reference: C v9fs on r9share ------------------------------------------------------------
+ manifest() {
+   (cd "$1" && find . -mindepth 1 | LC_ALL=C sort | while IFS= read -r f; do
+     meta="$(stat -c '%F %a %h %u %g %i' -- "$f")"
+@@ -76,12 +63,34 @@ manifest() {
+   done)
+ }
+ 
++ref="$work/ref"
++mkdir -p "$ref"
++require mount-ref-v9fs mount -t 9p -o trans=virtio,version=9p2000.L,msize=131072 r9share "$ref"
++manifest "$ref" > "$work/ref.manifest"
++ref_df="$(stat -f -c '%b %f %a %S' "$ref")"
++ref_bytes=$(( $(stat -f -c '%S * %b' "$ref") ))
++ref_bsize="$(stat -f -c %S "$ref")"
++ref_sum="$(sha256sum < "$ref/big.bin")"
++require umount-ref-v9fs umount "$ref"
++
++require load "$kmod" load "$tmp/r9fs.ko"
++require registered grep -qw r9fs /proc/filesystems
++
++for tag in r9share r9slow; do
++  dev="${dev_of[$tag]}"
++  if [ -e "/sys/bus/virtio/devices/$dev/driver" ]; then
++    echo "$dev" > "/sys/bus/virtio/devices/$dev/driver/unbind"
++  fi
++  echo "$dev" > /sys/bus/virtio/drivers/r9fs_virtio/bind
++  drv="$(basename "$(readlink "/sys/bus/virtio/devices/$dev/driver")")"
++  require "bind-$tag" [ "$drv" = r9fs_virtio ]
++done
++
+ r9="$work/mnt"
+ mkdir -p "$r9"
+ require mount mount -t r9fs -o msize=131072 r9share "$r9"
+ grep " $r9 " /proc/mounts
+ 
+-manifest "$share" > "$work/ref.manifest"
+ manifest "$r9" > "$work/r9fs.manifest"
+ cp -f "$work/ref.manifest" "$work/r9fs.manifest" "$logs/" 2>/dev/null || true
+ rows="$(wc -l < "$work/ref.manifest")"
+@@ -91,13 +100,12 @@ if [ "$rows" -ge 600 ] && diff -u "$work/ref.manifest" "$work/r9fs.manifest" > "
+ else
+   bad manifest-vs-v9fs "$(head -c 2000 "$work/manifest.diff")"
+ fi
+-ref_df="$(stat -f -c '%b %f %a %S' "$share")"
+ r9_df="$(stat -f -c '%b %f %a %S' "$r9")"
+ echo "r9fs: statfs ref=[$ref_df] r9fs=[$r9_df]"
+ # QEMU scales f_bsize with the negotiated msize, so compare capacity in bytes (one block of slack).
+-ref_bytes=$(( $(stat -f -c '%S * %b' "$share") ))
+ r9_bytes=$(( $(stat -f -c '%S * %b' "$r9") ))
+-slack=$(( $(stat -f -c %S "$share") > $(stat -f -c %S "$r9") ? $(stat -f -c %S "$share") : $(stat -f -c %S "$r9") ))
++r9_bsize="$(stat -f -c %S "$r9")"
++slack=$(( ref_bsize > r9_bsize ? ref_bsize : r9_bsize ))
+ d=$(( ref_bytes > r9_bytes ? ref_bytes - r9_bytes : r9_bytes - ref_bytes ))
+ [ "$d" -le "$slack" ] && pass statfs || bad statfs "ref=$ref_bytes r9fs=$r9_bytes"
+ 
+@@ -112,7 +120,6 @@ mount -o remount,rw "$r9" 2>/dev/null
+ grep " $r9 " /proc/mounts | grep -q ' ro[ ,]' && pass remount-stays-ro || bad remount-stays-ro
+ e="$(errno_of chmod 600 "$r9/hello.txt")"; [[ "$e" == *"Read-only"* ]] && pass erofs-chmod || bad erofs-chmod "$e"
+ 
+-ref_sum="$(sha256sum < "$share/big.bin")"
+ for i in 1 2 3 4 5 6 7 8; do sha256sum < "$r9/big.bin" > "$work/par.$i" & done
+ wait
+ [ "$(cat "$work"/par.* | sort -u)" = "$ref_sum" ] && pass parallel-read || bad parallel-read
+-- 
+2.43.0
+

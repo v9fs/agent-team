@@ -1,0 +1,233 @@
+From 1a5a0aa1f2b5e0f983c77de6ccc578e0acf55706 Mon Sep 17 00:00:00 2001
+From: Cursor Agent <cursoragent@cursor.com>
+Date: Thu, 8 Oct 2026 22:28:55 +0000
+Subject: [PATCH] Add r9fs workflow: build the Rust kernel on the runner and
+ run the r9fs suite
+
+r9fs needs CONFIG_RUST and an r9fs.ko from the same commit as the
+Image, which the published Image line does not provide, and
+ghcr.io/v9fs/docker has no Rust toolchain. r9fs.yml (manual, arm64
+runner) installs clang, rustc 1.99.0 + rust-src and bindgen-cli 0.73.2
+(scripts/v9fs-install-rust-toolchain), builds the Image + r9fs.ko from
+linux_repository@linux_ref, and runs v9fs-run-tests r9fs in the harness
+container.
+
+v9fs-prepare-r9fs takes R9FS_KO so a caller can stage another module
+built from the same kernel commit. v9fs-run-tests keeps r9fs.log in
+logs/<ts>/.
+---
+ .github/workflows/r9fs.yml          | 79 +++++++++++++++++++++++++++++
+ CHANGES.md                          |  1 +
+ README.md                           |  2 +-
+ TODO.md                             |  2 +-
+ scripts/v9fs-install-rust-toolchain | 31 +++++++++++
+ scripts/v9fs-prepare-r9fs           |  7 +--
+ scripts/v9fs-run-tests              |  3 ++
+ 7 files changed, 120 insertions(+), 5 deletions(-)
+ create mode 100644 .github/workflows/r9fs.yml
+ create mode 100755 scripts/v9fs-install-rust-toolchain
+
+diff --git a/.github/workflows/r9fs.yml b/.github/workflows/r9fs.yml
+new file mode 100644
+index 0000000..c1c9158
+--- /dev/null
++++ b/.github/workflows/r9fs.yml
+@@ -0,0 +1,79 @@
++name: r9fs suite (Rust kernel build + test)
++
++# r9fs (fs/r9fs, Rust) is not part of the published Image line: it needs CONFIG_RUST and a
++# loadable r9fs.ko built from the same commit as the Image, and ghcr.io/v9fs/docker has no
++# Rust toolchain. This workflow builds both on the runner and runs the `r9fs` suite with the
++# same container and scripts as Harness CI.
++
++on:
++  workflow_dispatch:
++    inputs:
++      linux_repository:
++        description: "Kernel repository"
++        required: true
++        default: "v9fs/linux"
++        type: string
++      linux_ref:
++        description: "Kernel ref carrying fs/r9fs"
++        required: true
++        default: "cursor/r9fs-rust-virtio-f6e3"
++        type: string
++
++permissions:
++  contents: read
++
++jobs:
++  r9fs:
++    runs-on: ubuntu-24.04-arm
++    timeout-minutes: 180
++    env:
++      V9FS_DOCKER_IMAGE: ghcr.io/v9fs/docker:latest
++    steps:
++      - name: Checkout harness
++        uses: actions/checkout@v7
++
++      - name: Checkout kernel
++        uses: actions/checkout@v7
++        with:
++          repository: ${{ inputs.linux_repository }}
++          ref: ${{ inputs.linux_ref }}
++          path: linux
++
++      - name: Install Rust kernel toolchain
++        run: ./scripts/v9fs-install-rust-toolchain
++
++      - name: Build arm64 Image + r9fs.ko
++        run: ./scripts/v9fs-build-r9fs-kernel "$GITHUB_WORKSPACE/linux" "$GITHUB_WORKSPACE/kernel/.build"
++
++      - name: Run r9fs (guest-direct, chroot)
++        run: |
++          mkdir -p "$GITHUB_WORKSPACE/tmp"
++          docker run --rm --privileged \
++            --name "v9fs-test.r9fs.${{ github.run_id }}.${{ github.run_attempt }}" \
++            --label v9fs.harness=v9fs-test \
++            --user 0:0 \
++            -e KERNELBUILD=/workspaces/kernel/.build \
++            -v "$GITHUB_WORKSPACE:/home/v9fs-test/test" \
++            -v "$GITHUB_WORKSPACE/kernel:/workspaces/kernel" \
++            -v "$GITHUB_WORKSPACE/tmp:/workspaces/tmp" \
++            -w /home/v9fs-test/test \
++            "${V9FS_DOCKER_IMAGE}" \
++            bash -lc "./scripts/v9fs-run-tests r9fs"
++
++      - name: Dump logs on failure
++        if: failure()
++        run: |
++          for f in logs/*/r9fs.log logs/*/klog.json; do echo "---- $f"; cat "$f" || true; done
++          for f in logs/*/qemu.log; do echo "---- $f"; tail -n 250 "$f" || true; done
++
++      - name: Fix log permissions (for artifact upload)
++        if: always()
++        run: sudo chmod -R a+rX logs || true
++
++      - name: Upload logs
++        if: always()
++        uses: actions/upload-artifact@v7
++        with:
++          name: r9fs-logs
++          path: logs
++          retention-days: 7
+diff --git a/CHANGES.md b/CHANGES.md
+index 84636d7..bdf5298 100644
+--- a/CHANGES.md
++++ b/CHANGES.md
+@@ -1,6 +1,7 @@
+ ## Unreleased
+ 
+ - Add `r9fs` suite for the read-only Rust 9P2000.L file system (`fs/r9fs`, v9fs/linux branch `cursor/r9fs-rust-virtio-f6e3`; agent-team D0004). `qemu.bash` adds two virtio-9p devices (`r9share`, and `r9slow` with `throttling.bps-read`) when `R9FS_SHARE` is set. `scripts/v9fs-r9fs-tests` moves them from `9pnet_virtio` to `r9fs_virtio` and diffs an r9fs manifest against the C v9fs view of the same host directory. It also checks read-only/negative cases, kill latency of a stalled reader, and that unbinding the device fails a posted read instead of waiting for it. `scripts/v9fs-kmod` loads modules (the chroot has no kmod). `scripts/v9fs-build-r9fs-kernel` builds the Rust-enabled Image + `r9fs.ko` outside the container (no Rust toolchain in `ghcr.io/v9fs/docker`). Not wired into Actions yet.
++- Add `.github/workflows/r9fs.yml` (manual, `ubuntu-24.04-arm`). It installs clang, rustc 1.99.0 + rust-src and bindgen-cli 0.73.2 (`scripts/v9fs-install-rust-toolchain`), builds the Image + `r9fs.ko` from `linux_repository`@`linux_ref`, and runs `v9fs-run-tests r9fs` in `ghcr.io/v9fs/docker`. `v9fs-prepare-r9fs` takes `R9FS_KO` (a module from the same kernel commit). `v9fs-run-tests` keeps `r9fs.log` in `logs/<ts>/`.
+ 
+ - t0011 allsquash: patch `--squashuser=$(id -un)` in prepare so `exp/` ownership matches the runner; drop t0011 rows from `diod/xfail.txt` (#28 / agent-team#5 / [test#31](https://github.com/v9fs/test/pull/31)).
+ 
+diff --git a/README.md b/README.md
+index 2602a85..c5bd74c 100644
+--- a/README.md
++++ b/README.md
+@@ -36,7 +36,7 @@ docker run --rm --privileged --user 0:0 \
+ 
+ Harness matrix suites: `smoke`, `fsx`, `postmark`, `dbench`, `diod-regression`, `qemu-9p2000.L`.
+ 
+-Local-only suite: `r9fs` (Rust r9fs vs C v9fs over the same QEMU export). It needs `KERNELBUILD` from `scripts/v9fs-build-r9fs-kernel <linux-src>`, which provides the Image plus `fs/r9fs/r9fs.ko`.
++Separate suite: `r9fs` (manual workflow `r9fs.yml`, which builds its own Rust kernel) (Rust r9fs vs C v9fs over the same QEMU export). It needs `KERNELBUILD` from `scripts/v9fs-build-r9fs-kernel <linux-src>`, which provides the Image plus `fs/r9fs/r9fs.ko`.
+ 
+ ## GitHub Actions
+ 
+diff --git a/TODO.md b/TODO.md
+index 0d79f04..e878d4c 100644
+--- a/TODO.md
++++ b/TODO.md
+@@ -1,6 +1,6 @@
+ ## TODO
+ 
+-- r9fs suite in Actions: needs a Rust-enabled kernel build (clang, rustc + rust-src, bindgen) and a published `r9fs.ko` next to `Image`; either add the toolchain to `v9fs/docker` or build on the runner with `scripts/v9fs-build-r9fs-kernel`.
++- r9fs suite: `r9fs.yml` is manual (`workflow_dispatch`) and rebuilds the kernel each run. Add it to `workflow_run` and the wiki dashboard once r9fs tracks a published kernel line; move the Rust toolchain into `v9fs/docker` if build time matters.
+ - Configure/keep repo secret `V9FS_LINUX_SYNC_TOKEN` (Contents write on `v9fs/linux`, Actions + Contents on `v9fs/test` for publish chaining and wiki/`results.json` attach).
+ - Nightly/for-next/fixes Images and harness runs (#5). Mainline `upstream` SHA changes and new/missing newest v6+ tags now publish+test from sync (#6).
+ - QEMU serial / dmesg BUG+WARN scanning (#4): smoke + protocol suites enforce; grow `klog/allow.txt` before turning on fsx/dbench/diod.
+diff --git a/scripts/v9fs-install-rust-toolchain b/scripts/v9fs-install-rust-toolchain
+new file mode 100755
+index 0000000..c0dffa7
+--- /dev/null
++++ b/scripts/v9fs-install-rust-toolchain
+@@ -0,0 +1,31 @@
++#!/usr/bin/env bash
++# Install the toolchain scripts/v9fs-build-r9fs-kernel needs on an Ubuntu runner:
++# clang/lld (LLVM=1), rustc with rust-src, and bindgen. ghcr.io/v9fs/docker has none of them.
++#
++# Versions match the recorded r9fs runs; override with RUST_VERSION / BINDGEN_VERSION.
++set -euo pipefail
++
++RUST_VERSION="${RUST_VERSION:-1.99.0}"
++BINDGEN_VERSION="${BINDGEN_VERSION:-0.73.2}"
++
++sudo apt-get update -q
++sudo apt-get install -y -q --no-install-recommends \
++  clang lld llvm libclang-dev bc bison flex libelf-dev libssl-dev make cpio
++
++if ! command -v rustup >/dev/null 2>&1; then
++  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs |
++    sh -s -- -y --profile minimal --default-toolchain none
++fi
++export PATH="$HOME/.cargo/bin:$PATH"
++rustup toolchain install "$RUST_VERSION" --profile minimal --component rust-src
++rustup default "$RUST_VERSION"
++if [ "$(bindgen --version 2>/dev/null)" != "bindgen $BINDGEN_VERSION" ]; then
++  cargo install --locked --version "$BINDGEN_VERSION" bindgen-cli
++fi
++
++if [ -n "${GITHUB_PATH:-}" ]; then
++  echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
++fi
++rustc --version
++bindgen --version
++clang --version | head -1
+diff --git a/scripts/v9fs-prepare-r9fs b/scripts/v9fs-prepare-r9fs
+index 12c0e7e..0c4aa28 100755
+--- a/scripts/v9fs-prepare-r9fs
++++ b/scripts/v9fs-prepare-r9fs
+@@ -2,11 +2,12 @@
+ # Host-side (container) preparation for the r9fs suite.
+ #
+ # - builds the v9fs-kmod module loader (the Debian chroot has no kmod);
+-# - stages r9fs.ko from KERNELBUILD so the guest can load it;
++# - stages r9fs.ko (R9FS_KO, default from KERNELBUILD) so the guest can load it;
+ # - creates the export that QEMU serves on tags r9share and r9slow.
+ #
+ # The kernel under test must be built with CONFIG_RUST=y and CONFIG_R9FS_FS=m
+-# (scripts/v9fs-build-r9fs-kernel).
++# (scripts/v9fs-build-r9fs-kernel). R9FS_KO must come from the same kernel commit as the
++# Image: the commit is part of the vermagic.
+ set -euo pipefail
+ 
+ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+@@ -14,7 +15,7 @@ KERNELBUILD="${KERNELBUILD:-/workspaces/kernel/.build}"
+ out="${R9FS_TMP:-/workspaces/tmp/r9fs}"
+ share="${R9FS_SHARE:-/workspaces/tmp/r9fs-share}"
+ 
+-ko="${KERNELBUILD}/fs/r9fs/r9fs.ko"
++ko="${R9FS_KO:-${KERNELBUILD}/fs/r9fs/r9fs.ko}"
+ if [ ! -f "$ko" ]; then
+   echo "ERROR: $ko not found; build the kernel with scripts/v9fs-build-r9fs-kernel"
+   exit 2
+diff --git a/scripts/v9fs-run-tests b/scripts/v9fs-run-tests
+index f82a7dc..cc0dbf7 100755
+--- a/scripts/v9fs-run-tests
++++ b/scripts/v9fs-run-tests
+@@ -108,6 +108,9 @@ fi
+ if [ -f "${dmesg_src}" ]; then
+   cp -f "${dmesg_src}" "${dmesg_file}" 2>/dev/null || true
+ fi
++if [ "${tests}" = r9fs ] && [ -f logs/r9fs.log ]; then
++  cp -f logs/r9fs.log "logs/${TIMESTAMP}/r9fs.log" 2>/dev/null || true
++fi
+ 
+ klog_json="logs/${TIMESTAMP}/klog.json"
+ scan_rc=0
+-- 
+2.43.0
+

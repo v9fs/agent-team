@@ -1,8 +1,9 @@
 # v9fs/test: `r9fs` suite (harness patches)
 
-Two commits for `v9fs/test` on top of `main` `922aacebb637a7e1f366877f039c81073f29a6aa`.
-Local branch `cursor/r9fs-suite-f6e3`, head `efba6afa718a70413a61dc9f12fd24a4bd396abb`
-(tree `5730052fe94a5f24c1d4a7efebdcb6629606da07`, reproduced by `git am`). Pushing to
+Three commits for `v9fs/test` on top of `main` `922aacebb637a7e1f366877f039c81073f29a6aa`.
+Local branch `cursor/r9fs-suite-f6e3`, head `1a5a0aa1f2b5e0f983c77de6ccc578e0acf55706`
+(tree `bd5562af4d62cdc7075dea47de4c3e7910704393`, reproduced by `git am`). The 0001..0002
+head was `efba6afa718a` (tree `5730052fe94a`). Pushing to
 `v9fs/test` was refused (`403: Permission to v9fs/test.git denied to cursor[bot]`).
 
 ```bash
@@ -14,6 +15,7 @@ git am docs/patches/v9fs-test-r9fs/000*.patch
 | --- | --- |
 | 0001 | `qemu.bash` (devices `r9share` and throttled `r9slow` when `R9FS_SHARE` is set), `scripts/v9fs-run-tests` + `scripts/v9fs-build-initrd` (`r9fs` suite, klog enforced), new `scripts/v9fs-r9fs-tests`, `scripts/v9fs-prepare-r9fs`, `scripts/v9fs-kmod.c`, `scripts/v9fs-build-r9fs-kernel`; README/CHANGES/TODO |
 | 0002 | `scripts/v9fs-r9fs-tests`: time the unbind check with shell builtins on guest tmpfs, and record the timings instead of asserting on them |
+| 0003 | `.github/workflows/r9fs.yml` (manual, `ubuntu-24.04-arm`): toolchain (`scripts/v9fs-install-rust-toolchain`), Rust kernel build, `v9fs-run-tests r9fs`, logs artifact; `R9FS_KO` override in prepare; `r9fs.log` kept in `logs/<ts>/` |
 
 The suite runs the way the existing suites do. The guest boots the harness initrd, mounts
 the container root over C v9fs (`hostshare`) and runs the suite in the Debian chroot. The
@@ -22,7 +24,14 @@ of the same host directory is the reference.
 
 ## Running it
 
-On an arm64 host (as in CI), build the kernel and then run the suite as usual:
+In `v9fs/test` Actions, after a human pushes the kernel branch and these patches, run it by
+hand:
+
+```bash
+gh workflow run r9fs.yml -f linux_repository=v9fs/linux -f linux_ref=cursor/r9fs-rust-virtio-f6e3
+```
+
+On any arm64 host, build the kernel and then run the suite as usual:
 
 ```bash
 scripts/v9fs-build-r9fs-kernel /path/to/linux ./kernel/.build   # needs clang, rustc+rust-src, bindgen

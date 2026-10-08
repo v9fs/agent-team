@@ -1,0 +1,103 @@
+From 9ee8f93a3439077e2946d5880f3e31cc5ef1255d Mon Sep 17 00:00:00 2001
+From: Cursor Agent <cursoragent@cursor.com>
+Date: Thu, 8 Oct 2026 14:40:06 +0000
+Subject: [PATCH] rust: virtio, fs: avoid double del_vqs and keep remount
+ read-only
+
+virtio-mmio's del_vqs frees the device IRQ unconditionally, so calling
+it after the post-probe failure path (or after a failing find_vqs, or
+before any queue was found) triggers the already-free IRQ warning.
+Only delete queues on probe failure while some remain.
+
+Follow erofs and squashfs on reconfigure: keep SB_RDONLY set instead
+of failing, so legacy remounts that only change other flags (which
+always pass the full MS_RMT_MASK) still succeed.
+
+Document that the fs abstractions are read-only and that remount does
+not re-parse options.
+---
+ rust/helpers/virtio.c        |  5 +++++
+ rust/kernel/fs/filesystem.rs | 13 +++++++------
+ rust/kernel/virtio.rs        | 11 +++++++++--
+ 3 files changed, 21 insertions(+), 8 deletions(-)
+
+diff --git a/rust/helpers/virtio.c b/rust/helpers/virtio.c
+index c6b1f86e8..ade797f43 100644
+--- a/rust/helpers/virtio.c
++++ b/rust/helpers/virtio.c
+@@ -39,6 +39,11 @@ __rust_helper u16 rust_helper_virtio_cread16(struct virtio_device *vdev,
+ 	return virtio16_to_cpu(vdev, v);
+ }
+ 
++__rust_helper bool rust_helper_virtio_has_vqs(struct virtio_device *vdev)
++{
++	return !list_empty(&vdev->vqs);
++}
++
+ __rust_helper void rust_helper_virtio_del_vqs(struct virtio_device *vdev)
+ {
+ 	vdev->config->del_vqs(vdev);
+diff --git a/rust/kernel/fs/filesystem.rs b/rust/kernel/fs/filesystem.rs
+index ba440c2d3..2e91755d9 100644
+--- a/rust/kernel/fs/filesystem.rs
++++ b/rust/kernel/fs/filesystem.rs
+@@ -7,6 +7,9 @@
+ //! [`FileSystem::Data`]; inodes carry [`FileSystem::INodeData`] and open files carry
+ //! [`FileSystem::FileData`].
+ //!
++//! The abstractions have no write paths, so every superblock is read-only: `SB_RDONLY` is
++//! forced at mount time and kept on remount. Remount does not re-parse file system options.
++//!
+ //! Dentries are never cached once unused and inodes are dropped on last reference, so every
+ //! path walk consults the file system again (the equivalent of `cache=none`).
+ //!
+@@ -201,7 +204,6 @@ pub fn set_blocksize_bits(&mut self, bits: u8) -> &mut Self {
+         }
+         self
+     }
+-
+ }
+ 
+ /// A registered file system type.
+@@ -400,12 +402,11 @@ impl<T: FileSystem> Tables<T> {
+     }
+ 
+     unsafe extern "C" fn reconfigure(fc: *mut bindings::fs_context) -> c_int {
+-        let rdonly = bindings::SB_RDONLY as c_uint;
++        // Like erofs and squashfs: keep the superblock read-only instead of failing, so that
++        // remounts changing only other flags (legacy `mount(2)` always passes the full
++        // `MS_RMT_MASK`) still work.
+         // SAFETY: The VFS passes a valid reconfiguration context.
+-        let (flags, mask) = unsafe { ((*fc).sb_flags, (*fc).sb_flags_mask) };
+-        if mask & rdonly != 0 && flags & rdonly == 0 {
+-            return EROFS.to_errno();
+-        }
++        unsafe { (*fc).sb_flags |= bindings::SB_RDONLY as c_uint };
+         0
+     }
+ 
+diff --git a/rust/kernel/virtio.rs b/rust/kernel/virtio.rs
+index 3ec647551..fe72c1424 100644
+--- a/rust/kernel/virtio.rs
++++ b/rust/kernel/virtio.rs
+@@ -287,8 +287,15 @@ unsafe impl<T: Driver> Sync for Registration<T> {}
+     match res {
+         Ok(()) => 0,
+         Err(e) => {
+-            // SAFETY: The device is valid; deleting no or already-found queues is allowed.
+-            unsafe { bindings::virtio_del_vqs(vdev) };
++            // `del_vqs` is not idempotent on every transport (virtio-mmio frees its IRQ
++            // unconditionally), so only call it while queues found by `probe` remain. The
++            // post-probe failure path above, and a failing `find_vqs`, leave none behind.
++            // SAFETY: The device is valid for the duration of probe.
++            unsafe {
++                if bindings::virtio_has_vqs(vdev) {
++                    bindings::virtio_del_vqs(vdev);
++                }
++            }
+             e.to_errno()
+         }
+     }
+-- 
+2.43.0
+

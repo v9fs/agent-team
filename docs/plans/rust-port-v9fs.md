@@ -10,7 +10,9 @@
   `602042bf29f6efde39cfb5fdd9289bf4854bc0c5` (v7.3-rc6+, 2026-10-07); E0009,
   E0010; `docs/reports/rust-port-inventory.md` (JSON regenerable; `docs/reports/**/*.json` is gitignored)
 - This slice: R0, mapping and strategy only (Unmapped → Mapped). No kernel code.
-- Strategy: D0003 (Proposed, human decision required)
+- Strategy: D0003 (Proposed, human decision required). Amended by D0004: on human
+  steering, a separate read-only `r9fs` module over virtio with local Rust
+  bindings now exists on topic branch `cursor/r9fs-rust-virtio-f6e3` (E0011, P0006)
 - GitHub milestone: proposed `M2 - Rust v9fs` (to be created by a human or a
   `gh`-write agent)
 - Branch: `cursor/rust-port-map-f6e3`

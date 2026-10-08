@@ -11,6 +11,8 @@ surface harder to read.
   existing Rust abstractions (`scripts/rust-port-inventory.py`; D0003).
 - `r9fs-virtio-smoke.md` (+ `.host-manifest.txt`): r9fs QEMU smoke run vs host
   reference manifest (P0006; D0004).
+- `r9fs-harness.md` (+ `r9fs-harness/*.txt` guest output): r9fs `v9fs/test` suite,
+  current module vs slice-1 control, C v9fs as reference (P0007; R0006).
 
 Do not store credentials, tokens, cookies, secret-bearing session URLs, or raw
 reasoning. Prefer compact, reproducible evidence and link it once from GitHub.

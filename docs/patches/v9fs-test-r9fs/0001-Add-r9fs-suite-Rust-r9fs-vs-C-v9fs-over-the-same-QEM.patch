@@ -1,0 +1,443 @@
+From faf9281542c4a87fc8b0f9a4b1a56178a794d4f0 Mon Sep 17 00:00:00 2001
+From: Cursor Agent <cursoragent@cursor.com>
+Date: Thu, 8 Oct 2026 17:31:33 +0000
+Subject: [PATCH 1/2] Add r9fs suite: Rust r9fs vs C v9fs over the same QEMU
+ virtio-9p export
+
+qemu.bash exports R9FS_SHARE on two more virtio-9p devices: r9share,
+and r9slow with throttled reads. The guest suite moves both from
+9pnet_virtio to r9fs_virtio. It diffs an r9fs manifest (stat fields,
+sha256, symlink targets) against the C v9fs view of the same host
+directory through hostshare, then checks read-only/negative cases and
+parallel reads. On r9slow it checks the kill latency of a reader
+blocked on a posted request, and that unbinding the device fails that
+request instead of delivering its reply.
+
+v9fs-kmod loads the module (the chroot has no kmod).
+v9fs-build-r9fs-kernel builds the Rust-enabled Image + r9fs.ko on the
+host, since ghcr.io/v9fs/docker has no Rust toolchain. Not wired into
+Actions yet.
+---
+ CHANGES.md                     |   2 +
+ README.md                      |   2 +
+ TODO.md                        |   1 +
+ qemu.bash                      |  11 +++
+ scripts/v9fs-build-initrd      |   7 ++
+ scripts/v9fs-build-r9fs-kernel |  31 +++++++
+ scripts/v9fs-kmod.c            |  39 ++++++++
+ scripts/v9fs-prepare-r9fs      |  42 +++++++++
+ scripts/v9fs-r9fs-tests        | 157 +++++++++++++++++++++++++++++++++
+ scripts/v9fs-run-tests         |   9 +-
+ 10 files changed, 299 insertions(+), 2 deletions(-)
+ create mode 100755 scripts/v9fs-build-r9fs-kernel
+ create mode 100644 scripts/v9fs-kmod.c
+ create mode 100755 scripts/v9fs-prepare-r9fs
+ create mode 100755 scripts/v9fs-r9fs-tests
+
+diff --git a/CHANGES.md b/CHANGES.md
+index d555761..84636d7 100644
+--- a/CHANGES.md
++++ b/CHANGES.md
+@@ -1,5 +1,7 @@
+ ## Unreleased
+ 
++- Add `r9fs` suite for the read-only Rust 9P2000.L file system (`fs/r9fs`, v9fs/linux branch `cursor/r9fs-rust-virtio-f6e3`; agent-team D0004). `qemu.bash` adds two virtio-9p devices (`r9share`, and `r9slow` with `throttling.bps-read`) when `R9FS_SHARE` is set. `scripts/v9fs-r9fs-tests` moves them from `9pnet_virtio` to `r9fs_virtio` and diffs an r9fs manifest against the C v9fs view of the same host directory. It also checks read-only/negative cases, kill latency of a stalled reader, and that unbinding the device fails a posted read instead of waiting for it. `scripts/v9fs-kmod` loads modules (the chroot has no kmod). `scripts/v9fs-build-r9fs-kernel` builds the Rust-enabled Image + `r9fs.ko` outside the container (no Rust toolchain in `ghcr.io/v9fs/docker`). Not wired into Actions yet.
++
+ - t0011 allsquash: patch `--squashuser=$(id -un)` in prepare so `exp/` ownership matches the runner; drop t0011 rows from `diod/xfail.txt` (#28 / agent-team#5 / [test#31](https://github.com/v9fs/test/pull/31)).
+ 
+ - diod-regression: mount a native guest tmpfs on `/tmp` inside the chroot before sharness (#28 / agent-team#6). Hostshare `FSDEV_PATH=/` made `/tmp` 9p-backed, so Image `TMPFS_XATTR` alone left t0013 at EOPNOTSUPP. Local `/tmp` setfacl probe is a hard gate. Drop t0013 rows from `diod/xfail.txt` after CI PASS (17/17).
+diff --git a/README.md b/README.md
+index b0840c7..2602a85 100644
+--- a/README.md
++++ b/README.md
+@@ -36,6 +36,8 @@ docker run --rm --privileged --user 0:0 \
+ 
+ Harness matrix suites: `smoke`, `fsx`, `postmark`, `dbench`, `diod-regression`, `qemu-9p2000.L`.
+ 
++Local-only suite: `r9fs` (Rust r9fs vs C v9fs over the same QEMU export). It needs `KERNELBUILD` from `scripts/v9fs-build-r9fs-kernel <linux-src>`, which provides the Image plus `fs/r9fs/r9fs.ko`.
++
+ ## GitHub Actions
+ 
+ Kernel **build** and **test** are separate. Images are GitHub Release assets (`Image` on a `kernel-*` tag). GitHub-hosted runners (`ubuntu-24.04-arm` for build/test, `ubuntu-latest` for sync/report).
+diff --git a/TODO.md b/TODO.md
+index e6c73b3..0d79f04 100644
+--- a/TODO.md
++++ b/TODO.md
+@@ -1,5 +1,6 @@
+ ## TODO
+ 
++- r9fs suite in Actions: needs a Rust-enabled kernel build (clang, rustc + rust-src, bindgen) and a published `r9fs.ko` next to `Image`; either add the toolchain to `v9fs/docker` or build on the runner with `scripts/v9fs-build-r9fs-kernel`.
+ - Configure/keep repo secret `V9FS_LINUX_SYNC_TOKEN` (Contents write on `v9fs/linux`, Actions + Contents on `v9fs/test` for publish chaining and wiki/`results.json` attach).
+ - Nightly/for-next/fixes Images and harness runs (#5). Mainline `upstream` SHA changes and new/missing newest v6+ tags now publish+test from sync (#6).
+ - QEMU serial / dmesg BUG+WARN scanning (#4): smoke + protocol suites enforce; grow `klog/allow.txt` before turning on fsx/dbench/diod.
+diff --git a/qemu.bash b/qemu.bash
+index 1eeb5db..5def5e3 100755
+--- a/qemu.bash
++++ b/qemu.bash
+@@ -42,6 +42,17 @@ qemu_args=(
+   -append "${APPEND} ${EXTRA_APPEND:-}"
+ )
+ 
++# r9fs suite: the same export on two extra virtio-9p devices, one with throttled reads so a
++# request stays posted long enough to kill its waiter or remove the device under it.
++if [ -n "${R9FS_SHARE:-}" ]; then
++  qemu_args+=(
++    -fsdev "local,security_model=none,id=fsdev1,path=${R9FS_SHARE}"
++    -device virtio-9p-pci,id=fs1,fsdev=fsdev1,mount_tag=r9share
++    -fsdev "local,security_model=none,id=fsdev2,path=${R9FS_SHARE},throttling.bps-read=${R9FS_SLOW_BPS:-1024}"
++    -device virtio-9p-pci,id=fs2,fsdev=fsdev2,mount_tag=r9slow
++  )
++fi
++
+ if [ "${QEMU_DAEMONIZE}" = "1" ]; then
+   qemu_args+=(
+     -serial "file:${LOG}"
+diff --git a/scripts/v9fs-build-initrd b/scripts/v9fs-build-initrd
+index 13aef22..dda3d60 100755
+--- a/scripts/v9fs-build-initrd
++++ b/scripts/v9fs-build-initrd
+@@ -73,6 +73,13 @@ if mount -t 9p -o "trans=virtio,version=${bootver},cache=loose" hostshare /mnt/9
+           /home/v9fs-test/test/scripts/v9fs-9p-protocol-tests "$server" "$dialect" 2>&1 | tee -a /home/v9fs-test/test/logs/9p-proto.log
+         ' || rc=$?
+         ;;
++      r9fs)
++        /mnt/9/usr/sbin/chroot /mnt/9 /bin/bash -lc '
++          set -o pipefail
++          mkdir -p /home/v9fs-test/test/logs
++          /home/v9fs-test/test/scripts/v9fs-r9fs-tests 2>&1 | tee /home/v9fs-test/test/logs/r9fs.log
++        ' || rc=$?
++        ;;
+       diod-regression)
+         # Run a subset of diod's kernel-client regression tests (sharness) inside the guest.
+         # Build artifacts are prepared on the host side under /workspaces/tmp/diod-build.
+diff --git a/scripts/v9fs-build-r9fs-kernel b/scripts/v9fs-build-r9fs-kernel
+new file mode 100755
+index 0000000..0220bcf
+--- /dev/null
++++ b/scripts/v9fs-build-r9fs-kernel
+@@ -0,0 +1,31 @@
++#!/usr/bin/env bash
++# Build the arm64 Image plus r9fs.ko for the r9fs suite.
++#
++#   scripts/v9fs-build-r9fs-kernel <linux-src> [<out-dir>]
++#
++# Same 9p options as linux-kernel-publish.yml, plus CONFIG_RUST=y and CONFIG_R9FS_FS=m.
++# Needs clang/lld, rustc (rust-src component) and bindgen on the host: the
++# ghcr.io/v9fs/docker image does not carry a Rust toolchain. Output layout matches
++# KERNELBUILD (arch/arm64/boot/Image, fs/r9fs/r9fs.ko).
++set -euo pipefail
++
++src="${1:?usage: $0 <linux-src> [<out-dir>]}"
++out="${2:-$PWD/kernel/.build}"
++mk=(make -C "$src" O="$out" ARCH=arm64 LLVM=1)
++
++mkdir -p "$out"
++[ -f "$out/.config" ] || "${mk[@]}" defconfig
++"$src/scripts/config" --file "$out/.config" \
++  -e NET_9P -e NET_9P_FD -e NET_9P_VIRTIO -e 9P_FS \
++  -e 9P_FS_POSIX_ACL -e 9P_FS_SECURITY -e 9P_FS_XATTR \
++  -e FS_POSIX_ACL -e TMPFS_POSIX_ACL -e TMPFS_XATTR \
++  -e UNIX -e VIRTIO_PCI -e PCI \
++  -e IKCONFIG -e IKCONFIG_PROC \
++  -e RUST -m R9FS_FS
++"${mk[@]}" olddefconfig
++for opt in CONFIG_RUST=y CONFIG_R9FS_FS=m CONFIG_9P_FS=y CONFIG_NET_9P_VIRTIO=y; do
++  grep -qx "$opt" "$out/.config" || { echo "ERROR: $opt not set (make rustavailable?)"; exit 2; }
++done
++"${mk[@]}" -j"$(nproc)" Image
++"${mk[@]}" -j"$(nproc)" fs/r9fs/r9fs.ko
++ls -l "$out/arch/arm64/boot/Image" "$out/fs/r9fs/r9fs.ko"
+diff --git a/scripts/v9fs-kmod.c b/scripts/v9fs-kmod.c
+new file mode 100644
+index 0000000..b1c4de3
+--- /dev/null
++++ b/scripts/v9fs-kmod.c
+@@ -0,0 +1,39 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * Minimal module loader for the guest chroot, which has no kmod.
++ *
++ *   v9fs-kmod load <file.ko> [params]
++ *   v9fs-kmod unload <name>
++ */
++#include <errno.h>
++#include <fcntl.h>
++#include <stdio.h>
++#include <string.h>
++#include <sys/syscall.h>
++#include <unistd.h>
++
++int main(int argc, char **argv)
++{
++	long rc;
++
++	if (argc >= 3 && !strcmp(argv[1], "load")) {
++		int fd = open(argv[2], O_RDONLY | O_CLOEXEC);
++
++		if (fd < 0) {
++			perror(argv[2]);
++			return 1;
++		}
++		rc = syscall(SYS_finit_module, fd, argc > 3 ? argv[3] : "", 0);
++		close(fd);
++	} else if (argc == 3 && !strcmp(argv[1], "unload")) {
++		rc = syscall(SYS_delete_module, argv[2], O_NONBLOCK);
++	} else {
++		fprintf(stderr, "usage: %s load <file.ko> [params] | unload <name>\n", argv[0]);
++		return 2;
++	}
++	if (rc) {
++		fprintf(stderr, "v9fs-kmod %s %s: %s\n", argv[1], argv[2], strerror(errno));
++		return 1;
++	}
++	return 0;
++}
+diff --git a/scripts/v9fs-prepare-r9fs b/scripts/v9fs-prepare-r9fs
+new file mode 100755
+index 0000000..12c0e7e
+--- /dev/null
++++ b/scripts/v9fs-prepare-r9fs
+@@ -0,0 +1,42 @@
++#!/usr/bin/env bash
++# Host-side (container) preparation for the r9fs suite.
++#
++# - builds the v9fs-kmod module loader (the Debian chroot has no kmod);
++# - stages r9fs.ko from KERNELBUILD so the guest can load it;
++# - creates the export that QEMU serves on tags r9share and r9slow.
++#
++# The kernel under test must be built with CONFIG_RUST=y and CONFIG_R9FS_FS=m
++# (scripts/v9fs-build-r9fs-kernel).
++set -euo pipefail
++
++script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
++KERNELBUILD="${KERNELBUILD:-/workspaces/kernel/.build}"
++out="${R9FS_TMP:-/workspaces/tmp/r9fs}"
++share="${R9FS_SHARE:-/workspaces/tmp/r9fs-share}"
++
++ko="${KERNELBUILD}/fs/r9fs/r9fs.ko"
++if [ ! -f "$ko" ]; then
++  echo "ERROR: $ko not found; build the kernel with scripts/v9fs-build-r9fs-kernel"
++  exit 2
++fi
++
++mkdir -p "$out"
++gcc -O2 -o "$out/v9fs-kmod" "${script_dir}/v9fs-kmod.c"
++cp -f "$ko" "$out/r9fs.ko"
++sha256sum "$out/r9fs.ko" | tee "$out/r9fs.ko.sha256"
++
++rm -rf "$share"
++mkdir -p "$share/sub" "$share/many"
++cd "$share"
++printf 'hello r9fs\n' > hello.txt
++head -c 3000000 /dev/urandom > big.bin
++ln -s hello.txt link
++ln -s sub/missing dangling
++printf 'deep\n' > sub/deep.txt
++mkfifo fifo
++for i in $(seq 1 600); do
++  echo "$i" > "many/file_with_a_reasonably_long_name_$i"
++done
++chmod 0600 sub/deep.txt
++chmod 0750 sub
++echo "r9fs: export at $share ($(find "$share" | wc -l) entries)"
+diff --git a/scripts/v9fs-r9fs-tests b/scripts/v9fs-r9fs-tests
+new file mode 100755
+index 0000000..49b70da
+--- /dev/null
++++ b/scripts/v9fs-r9fs-tests
+@@ -0,0 +1,157 @@
++#!/usr/bin/env bash
++# r9fs suite: runs inside the guest chroot (whose root is the C v9fs hostshare mount).
++#
++# QEMU exports the same host directory on two extra virtio-9p devices:
++#   r9share  - unthrottled; differential and negative checks
++#   r9slow   - read-throttled (qemu.bash R9FS_SLOW_BPS); kill and unbind checks
++# At boot the built-in C 9pnet_virtio driver binds every virtio-9p device; this suite moves
++# r9share and r9slow to r9fs_virtio. The reference for the differential is the C v9fs view of
++# the same host directory through hostshare.
++set -uo pipefail
++
++tmp="${R9FS_TMP:-/workspaces/tmp/r9fs}"
++share="${R9FS_SHARE:-/workspaces/tmp/r9fs-share}"
++logs="/home/v9fs-test/test/logs"
++work="/workspaces/tmpdir/r9fs"
++kmod="$tmp/v9fs-kmod"
++mkdir -p "$logs" "$work"
++rm -rf "${work:?}"/*
++
++fail=0
++pass() { echo "PASS $1"; }
++bad() { echo "FAIL $1${2:+: $2}"; fail=1; }
++check() { local n="$1"; shift; if "$@"; then pass "$n"; else bad "$n"; fi; }
++require() { check "$@" || { echo "r9fs: cannot continue after $1"; exit 1; }; }
++now_ms() { awk '{print int($1 * 1000)}' /proc/uptime; }
++pstate() { awk '{print $3}' "/proc/$1/stat" 2>/dev/null; }
++errno_of() { # run a command, print its stderr (for EROFS/ENOENT/... matching)
++  "$@" 2>&1 >/dev/null
++}
++mount_errno() { # mount(2) directly: util-linux rewrites errnos into its own messages
++  python3 - "$@" <<'PY'
++import ctypes, errno, os, sys
++src, tgt, opts = sys.argv[1], sys.argv[2], (sys.argv[3] if len(sys.argv) > 3 else "")
++libc = ctypes.CDLL(None, use_errno=True)
++rc = libc.mount(src.encode(), tgt.encode(), b"r9fs", 0, opts.encode())
++print("OK" if rc == 0 else errno.errorcode[ctypes.get_errno()])
++PY
++}
++
++declare -A dev_of
++for d in /sys/bus/virtio/devices/virtio*; do
++  tag="$(tr -d '\0' < "$d/mount_tag" 2>/dev/null || true)"
++  case "$tag" in r9share|r9slow) dev_of[$tag]="$(basename "$d")" ;; esac
++done
++echo "r9fs: devices r9share=${dev_of[r9share]:-none} r9slow=${dev_of[r9slow]:-none}"
++if [ -z "${dev_of[r9share]:-}" ] || [ -z "${dev_of[r9slow]:-}" ]; then
++  bad devices "qemu.bash did not provide r9share/r9slow (R9FS_SHARE unset?)"
++  exit 1
++fi
++
++require load "$kmod" load "$tmp/r9fs.ko"
++require registered grep -qw r9fs /proc/filesystems
++
++for tag in r9share r9slow; do
++  dev="${dev_of[$tag]}"
++  if [ -e "/sys/bus/virtio/devices/$dev/driver" ]; then
++    echo "$dev" > "/sys/bus/virtio/devices/$dev/driver/unbind"
++  fi
++  echo "$dev" > /sys/bus/virtio/drivers/r9fs_virtio/bind
++  drv="$(basename "$(readlink "/sys/bus/virtio/devices/$dev/driver")")"
++  require "bind-$tag" [ "$drv" = r9fs_virtio ]
++done
++
++# --- differential against C v9fs -------------------------------------------------------------
++manifest() {
++  (cd "$1" && find . -mindepth 1 | LC_ALL=C sort | while IFS= read -r f; do
++    meta="$(stat -c '%F %a %h %u %g %i' -- "$f")"
++    if [ -L "$f" ]; then
++      echo "$f | $meta | -> $(readlink -- "$f")"
++    elif [ -f "$f" ]; then
++      echo "$f | $meta $(stat -c '%s %Y' -- "$f") | $(sha256sum < "$f" | cut -c1-64)"
++    else
++      echo "$f | $meta"
++    fi
++  done)
++}
++
++r9="$work/mnt"
++mkdir -p "$r9"
++require mount mount -t r9fs -o msize=131072 r9share "$r9"
++grep " $r9 " /proc/mounts
++
++manifest "$share" > "$work/ref.manifest"
++manifest "$r9" > "$work/r9fs.manifest"
++cp -f "$work/ref.manifest" "$work/r9fs.manifest" "$logs/" 2>/dev/null || true
++rows="$(wc -l < "$work/ref.manifest")"
++echo "r9fs: manifest rows ref=$rows r9fs=$(wc -l < "$work/r9fs.manifest")"
++if [ "$rows" -ge 600 ] && diff -u "$work/ref.manifest" "$work/r9fs.manifest" > "$work/manifest.diff"; then
++  pass manifest-vs-v9fs
++else
++  bad manifest-vs-v9fs "$(head -c 2000 "$work/manifest.diff")"
++fi
++ref_df="$(stat -f -c '%b %f %a %S' "$share")"
++r9_df="$(stat -f -c '%b %f %a %S' "$r9")"
++echo "r9fs: statfs ref=[$ref_df] r9fs=[$r9_df]"
++# QEMU scales f_bsize with the negotiated msize, so compare capacity in bytes (one block of slack).
++ref_bytes=$(( $(stat -f -c '%S * %b' "$share") ))
++r9_bytes=$(( $(stat -f -c '%S * %b' "$r9") ))
++slack=$(( $(stat -f -c %S "$share") > $(stat -f -c %S "$r9") ? $(stat -f -c %S "$share") : $(stat -f -c %S "$r9") ))
++d=$(( ref_bytes > r9_bytes ? ref_bytes - r9_bytes : r9_bytes - ref_bytes ))
++[ "$d" -le "$slack" ] && pass statfs || bad statfs "ref=$ref_bytes r9fs=$r9_bytes"
++
++# --- negative / read-only checks -------------------------------------------------------------
++mkdir -p "$work/x"
++e="$(mount_errno nosuchtag "$work/x")"; [ "$e" = ENOENT ] && pass bad-tag || bad bad-tag "$e"
++e="$(mount_errno r9share "$work/x" bogus=1)"; [ "$e" = EINVAL ] && pass bad-option || bad bad-option "$e"
++e="$(mount_errno r9share "$work/x")"; [ "$e" = EBUSY ] && pass busy-tag || bad busy-tag "$e"
++e="$(errno_of touch "$r9/new")"; [[ "$e" == *"Read-only"* ]] && pass erofs-create || bad erofs-create "$e"
++e="$(errno_of mkdir "$r9/d")"; [[ "$e" == *"Read-only"* ]] && pass erofs-mkdir || bad erofs-mkdir "$e"
++mount -o remount,rw "$r9" 2>/dev/null
++grep " $r9 " /proc/mounts | grep -q ' ro[ ,]' && pass remount-stays-ro || bad remount-stays-ro
++e="$(errno_of chmod 600 "$r9/hello.txt")"; [[ "$e" == *"Read-only"* ]] && pass erofs-chmod || bad erofs-chmod "$e"
++
++ref_sum="$(sha256sum < "$share/big.bin")"
++for i in 1 2 3 4 5 6 7 8; do sha256sum < "$r9/big.bin" > "$work/par.$i" & done
++wait
++[ "$(cat "$work"/par.* | sort -u)" = "$ref_sum" ] && pass parallel-read || bad parallel-read
++
++check umount umount "$r9"
++check remount mount -t r9fs r9share "$r9"
++[ "$(cat "$r9/sub/deep.txt")" = deep ] && pass reread || bad reread
++
++# --- stalled server: kill (r9slow) -----------------------------------------------------------
++slow="$work/slow"
++mkdir -p "$slow"
++require mount-slow mount -t r9fs -o msize=65536 r9slow "$slow"
++# One read(2) per Tread (bs < msize), so exactly one request is posted when the reader is killed.
++dd if="$slow/big.bin" of=/dev/null bs=4096 2>/dev/null & A=$!
++sleep 2
++st="$(pstate $A)"
++echo "r9fs: stalled reader state=$st"
++t0="$(now_ms)"; kill -9 "$A"; wait "$A" 2>/dev/null; t1="$(now_ms)"
++lat=$((t1 - t0))
++echo "r9fs: kill latency ${lat} ms (limit ${R9FS_KILL_MS:-1000})"
++[ "$st" = D ] && [ "$lat" -lt "${R9FS_KILL_MS:-1000}" ] && pass kill-stalled-reader || bad kill-stalled-reader "state=$st ${lat} ms"
++# The next request reaps the abandoned reply first and must get its own reply.
++[ "$(cat "$slow/hello.txt")" = "hello r9fs" ] && pass reply-after-kill || bad reply-after-kill
++
++# --- device removal during a posted request (r9slow) -----------------------------------------
++dd if="$slow/big.bin" of="$work/out" bs=4096 2>"$work/dd.err" & A=$!
++sleep 2
++st="$(pstate $A)"
++s1="$(stat -c %s "$work/out")"
++echo "${dev_of[r9slow]}" > /sys/bus/virtio/drivers/r9fs_virtio/unbind
++wait "$A"; rc=$?
++s2="$(stat -c %s "$work/out")"
++echo "r9fs: unbind reader_state=$st reader_rc=$rc bytes_before=$s1 bytes_after=$s2 ($(cat "$work/dd.err"))"
++# An uninterruptible transport waits for the posted reply and delivers it (s2 = s1 + 4096).
++[ "$st" = D ] && [ "$rc" -ne 0 ] && [ "$s2" -eq "$s1" ] && pass unbind-fails-posted-read || bad unbind-fails-posted-read
++e="$(errno_of ls "$slow")"; [[ "$e" == *"Input/output"* ]] && pass eio-after-unbind || bad eio-after-unbind "$e"
++check umount-slow umount "$slow"
++
++check umount-final umount "$r9"
++check unload "$kmod" unload r9fs
++
++echo "r9fs: done fail=$fail"
++exit "$fail"
+diff --git a/scripts/v9fs-run-tests b/scripts/v9fs-run-tests
+index 2dfc02e..f82a7dc 100755
+--- a/scripts/v9fs-run-tests
++++ b/scripts/v9fs-run-tests
+@@ -30,8 +30,12 @@ case "${tests}" in
+   diod-9p2000.L)
+     ./scripts/v9fs-prepare-diod-server
+     ;;
++  r9fs)
++    export R9FS_SHARE="${R9FS_SHARE:-/workspaces/tmp/r9fs-share}"
++    ./scripts/v9fs-prepare-r9fs
++    ;;
+   *)
+-    echo "ERROR: unknown tests=${tests} (expected smoke|fsx|postmark|dbench|diod-regression|qemu-9p2000.L|diod-9p2000.L)"
++    echo "ERROR: unknown tests=${tests} (expected smoke|fsx|postmark|dbench|diod-regression|qemu-9p2000.L|diod-9p2000.L|r9fs)"
+     exit 2
+     ;;
+ esac
+@@ -61,6 +65,7 @@ if [ -z "${wait_secs}" ]; then
+     fsx|postmark|dbench) wait_secs=900 ;;
+     diod-regression) wait_secs=2400 ;;
+     qemu-9p2000.L|diod-9p2000.L) wait_secs=600 ;;
++    r9fs) wait_secs=1200 ;;
+     *) wait_secs=300 ;;
+   esac
+ fi
+@@ -114,7 +119,7 @@ scan_rc=0
+ enforce="${V9FS_KLOG_ENFORCE:-}"
+ if [ -z "${enforce}" ]; then
+   case "${tests}" in
+-    smoke|qemu-9p2000.L|diod-9p2000.L) enforce=1 ;;
++    smoke|qemu-9p2000.L|diod-9p2000.L|r9fs) enforce=1 ;;
+     *) enforce=0 ;;
+   esac
+ fi
+-- 
+2.43.0
+

@@ -1,0 +1,37 @@
+r9fs: devices r9share=virtio3 r9slow=virtio4
+PASS load
+PASS registered
+PASS bind-r9share
+PASS bind-r9slow
+PASS mount
+r9share /workspaces/tmpdir/r9fs/mnt r9fs ro,relatime 0 0
+r9fs: manifest rows ref=608 r9fs=608
+PASS manifest-vs-v9fs
+r9fs: statfs ref=[2075202 1817231 1817103 131072] r9fs=[2142144 1875851 1875719 126976]
+PASS statfs
+PASS bad-tag
+PASS bad-option
+PASS busy-tag
+PASS erofs-create
+PASS erofs-mkdir
+PASS remount-stays-ro
+PASS erofs-chmod
+PASS parallel-read
+PASS umount
+PASS remount
+PASS reread
+PASS mount-slow
+r9fs: stalled reader state=D
+r9fs: kill latency 20 ms (limit 1000)
+PASS kill-stalled-reader
+PASS reply-after-kill
+r9fs: unbind reader_state=D reader_rc=1 bytes_before=0 bytes_after=0 unbind_ms=57588 reader_exit_ms=57581
+dd: error reading '/workspaces/tmpdir/r9fs/slow/big.bin': Input/output error 0+0 records in 0+0 records out 0 bytes copied, 59.8759 s, 0.0 kB/s 
+PASS unbind-fails-posted-read
+PASS eio-after-unbind
+PASS umount-slow
+PASS umount-final
+PASS unload
+r9fs: done fail=0
+guest.exitcode=0
+klog: {'bugs': 0, 'warns': 0, 'hung': 0, 'traces': 0, 'fail': 0}

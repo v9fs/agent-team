@@ -1,0 +1,77 @@
+From efba6afa718a70413a61dc9f12fd24a4bd396abb Mon Sep 17 00:00:00 2001
+From: Cursor Agent <cursoragent@cursor.com>
+Date: Thu, 8 Oct 2026 18:02:46 +0000
+Subject: [PATCH 2/2] r9fs suite: time the unbind check with builtins on guest
+ tmpfs
+
+QEMU's virtio-9p reset completes in-flight requests while holding its
+global lock, so during the unbind check the TCG guest (hostshare
+included) stalls until the throttled request finishes. Use bash's
+EPOCHREALTIME and keep the reader's files on tmpfs, and record
+unbind_ms/reader_exit_ms instead of asserting on them. The check stays
+on what the reader receives: the reply completed by the reset must not
+reach it. Also silence the mount_tag probe on non-9p virtio devices.
+---
+ scripts/v9fs-r9fs-tests | 29 ++++++++++++++++++++++-------
+ 1 file changed, 22 insertions(+), 7 deletions(-)
+
+diff --git a/scripts/v9fs-r9fs-tests b/scripts/v9fs-r9fs-tests
+index 49b70da..d7fca01 100755
+--- a/scripts/v9fs-r9fs-tests
++++ b/scripts/v9fs-r9fs-tests
+@@ -22,7 +22,8 @@ pass() { echo "PASS $1"; }
+ bad() { echo "FAIL $1${2:+: $2}"; fail=1; }
+ check() { local n="$1"; shift; if "$@"; then pass "$n"; else bad "$n"; fi; }
+ require() { check "$@" || { echo "r9fs: cannot continue after $1"; exit 1; }; }
+-now_ms() { awk '{print int($1 * 1000)}' /proc/uptime; }
++# Builtin clock: while a virtio-9p reset drains, any exec or write on the 9p root can stall.
++now_ms() { local t="$EPOCHREALTIME"; echo $(( ${t%.*} * 1000 + 10#${t#*.} / 1000 )); }
+ pstate() { awk '{print $3}' "/proc/$1/stat" 2>/dev/null; }
+ errno_of() { # run a command, print its stderr (for EROFS/ENOENT/... matching)
+   "$@" 2>&1 >/dev/null
+@@ -39,7 +40,7 @@ PY
+ 
+ declare -A dev_of
+ for d in /sys/bus/virtio/devices/virtio*; do
+-  tag="$(tr -d '\0' < "$d/mount_tag" 2>/dev/null || true)"
++  tag="$(tr -d '\0' 2>/dev/null < "$d/mount_tag" || true)"
+   case "$tag" in r9share|r9slow) dev_of[$tag]="$(basename "$d")" ;; esac
+ done
+ echo "r9fs: devices r9share=${dev_of[r9share]:-none} r9slow=${dev_of[r9slow]:-none}"
+@@ -137,14 +138,28 @@ echo "r9fs: kill latency ${lat} ms (limit ${R9FS_KILL_MS:-1000})"
+ [ "$(cat "$slow/hello.txt")" = "hello r9fs" ] && pass reply-after-kill || bad reply-after-kill
+ 
+ # --- device removal during a posted request (r9slow) -----------------------------------------
+-dd if="$slow/big.bin" of="$work/out" bs=4096 2>"$work/dd.err" & A=$!
++# QEMU's virtio-9p reset (in the driver's remove, after the r9fs wakeup) completes the throttled
++# request while holding QEMU's global lock, which stalls the whole TCG guest until then. So
++# unbind_ms/reader_exit_ms are recorded, not checked; the reply it completes must not reach the
++# reader. The reader's files are on guest tmpfs so they do not depend on hostshare.
++t="$work/tmpfs"
++mkdir -p "$t"
++mount -t tmpfs tmpfs "$t"
++(dd if="$slow/big.bin" of="$t/out" bs=4096 2>"$t/dd.err"; rc=$?; now_ms > "$t/dd.end"; exit $rc) &
++A=$!
+ sleep 2
+-st="$(pstate $A)"
+-s1="$(stat -c %s "$work/out")"
++D="$(pgrep -P "$A" -x dd)"
++st="$(pstate "$D")"
++s1="$(stat -c %s "$t/out")"
++t0="$(now_ms)"
+ echo "${dev_of[r9slow]}" > /sys/bus/virtio/drivers/r9fs_virtio/unbind
++t1="$(now_ms)"
+ wait "$A"; rc=$?
+-s2="$(stat -c %s "$work/out")"
+-echo "r9fs: unbind reader_state=$st reader_rc=$rc bytes_before=$s1 bytes_after=$s2 ($(cat "$work/dd.err"))"
++s2="$(stat -c %s "$t/out")"
++exit_ms=$(($(cat "$t/dd.end") - t0))
++echo "r9fs: unbind reader_state=$st reader_rc=$rc bytes_before=$s1 bytes_after=$s2 unbind_ms=$((t1 - t0)) reader_exit_ms=$exit_ms"
++tr '\n' ' ' < "$t/dd.err"; echo
++umount "$t"
+ # An uninterruptible transport waits for the posted reply and delivers it (s2 = s1 + 4096).
+ [ "$st" = D ] && [ "$rc" -ne 0 ] && [ "$s2" -eq "$s1" ] && pass unbind-fails-posted-read || bad unbind-fails-posted-read
+ e="$(errno_of ls "$slow")"; [[ "$e" == *"Input/output"* ]] && pass eio-after-unbind || bad eio-after-unbind "$e"
+-- 
+2.43.0
+

@@ -1,0 +1,54 @@
+r9fs: devices r9share=virtio3 r9slow=virtio4
+PASS load
+PASS registered
+PASS bind-r9share
+PASS bind-r9slow
+PASS mount
+r9share /workspaces/tmpdir/r9fs/mnt r9fs ro,relatime 0 0
+r9fs: manifest rows ref=608 r9fs=608
+FAIL manifest-vs-v9fs: --- /workspaces/tmpdir/r9fs/ref.manifest	2026-10-08 17:57:22.000000000 +0000
++++ /workspaces/tmpdir/r9fs/r9fs.manifest	2026-10-08 17:59:04.000000000 +0000
+@@ -1,608 +1,608 @@
+-./big.bin | regular file 644 1 0 0 943438 3000000 1791482139 | e2f217b91dea76d65a4b0ddd946406a8ae19817583d08af9f931688294f21884
+-./dangling | symbolic link 777 1 0 0 943442 | -> sub/missing
+-./fifo | fifo 644 1 0 0 943444
+-./hello.txt | regular file 644 1 0 0 943415 11 1791482139 | 08add34bad1a3bfd031223d9495425c80d5e618cb6c363a536e890ca6c0b3f96
+-./link | symbolic link 777 1 0 0 943441 | -> hello.txt
+-./many | directory 755 2 0 0 943413
+-./many/file_with_a_reasonably_long_name_1 | regular file 644 1 0 0 943445 2 1791482139 | 4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865
+-./many/file_with_a_reasonably_long_name_10 | regular file 644 1 0 0 943454 3 1791482139 | 917df3320d778ddbaa5c5c7742bc4046bf803c36ed2b050f30844ed206783469
+-./many/file_with_a_reasonably_long_name_100 | regular file 644 1 0 0 943544 4 1791482139 | eea8254c7500ba3de996aa8ad6af399183f04e17d4a8102fde539dbc93a90012
+-./many/file_with_a_reasonably_long_name_101 | regular file 644 1 0 0 943545 4 1791482139 | 39b8dc3fc8b44765c8e6f1adee04c5b465e555ab791cc42d0d9e810d5b64297c
+-./many/file_with_a_reasonably_long_name_102 | regular file 644 1 0 0 943546 4 1791482139 | 496ecdb854d49463f8655b210ddf17d3395d26b20a6f297b07cf99834c6336f0
+-./many/file_with_a_reasonably_long_name_103 | regular file 644 1 0 0 943547 4 1791482139 | 45080860abd6d79b808dbd71836bf29e41918f1bf1f05f7ce732ada7674cc816
+-./many/file_with_a_reasonably_long_name_104 | regular file 644 1 0 0 943548 4 1791482139 | 77a60c200656e08ac5403f38b58657ecec155293323bd5313290399b75cf1c3d
+-./many/file_with_a_reasonably_long_name_105 | regular file 644 1 0 0 943549 4 1791482139 | 2fcae9c346ff9530cd3b7303a6456e3a296ff1876b18b50c324343638ec2bdf3
+-./many/file_with_a_reasonably_long_name_106 | regular file 644 1 0 0 943550 4 1791482139 | 79f0cdc11a64b21e76816c25cc0d066a873134
+r9fs: statfs ref=[2075202 1817228 1817100 131072] r9fs=[2142144 1875848 1875716 126976]
+PASS statfs
+PASS bad-tag
+PASS bad-option
+PASS busy-tag
+PASS erofs-create
+PASS erofs-mkdir
+PASS remount-stays-ro
+PASS erofs-chmod
+PASS parallel-read
+PASS umount
+PASS remount
+PASS reread
+PASS mount-slow
+r9fs: stalled reader state=D
+r9fs: kill latency 1790 ms (limit 1000)
+FAIL kill-stalled-reader: state=D 1790 ms
+PASS reply-after-kill
+r9fs: unbind reader_state=D reader_rc=1 bytes_before=0 bytes_after=4096 unbind_ms=57539 reader_exit_ms=57540
+dd: error reading '/workspaces/tmpdir/r9fs/slow/big.bin': Input/output error 1+0 records in 1+0 records out 4096 bytes (4.1 kB, 4.0 KiB) copied, 59.8386 s, 0.1 kB/s 
+FAIL unbind-fails-posted-read
+PASS eio-after-unbind
+PASS umount-slow
+PASS umount-final
+PASS unload
+r9fs: done fail=1
+guest.exitcode=1
+klog: {'bugs': 0, 'warns': 0, 'hung': 0, 'traces': 0, 'fail': 0}

@@ -108,7 +108,7 @@ jobs:
       - name: Run r9fs suite (control must fail exactly the discriminating checks)
         working-directory: test
         run: |
-          set -uo pipefail
+          set +e -uo pipefail
           docker run --rm --privileged --label v9fs.harness=v9fs-test --user 0:0 \
             -e KERNELBUILD=/workspaces/kernel/.build -e TIMESTAMP=r9fs-control \
             -e R9FS_KO=/workspaces/kernel/control/r9fs.ko \

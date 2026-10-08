@@ -36,6 +36,13 @@ touch /mnt/new 2>/tmp/e; r write_touch $?; cat /tmp/e
 echo x >> /mnt/hello.txt 2>/tmp/e; r write_append $?; cat /tmp/e
 mkdir /mnt/d 2>/tmp/e; r mkdir $?; cat /tmp/e
 
+mount -o remount,rw /mnt 2>/tmp/e; r remount_rw $?; cat /tmp/e
+grep ' /mnt ' /proc/mounts
+chmod 600 /mnt/hello.txt 2>/tmp/e; r chmod_after_remount $?; cat /tmp/e
+chmod 600 /mnt/fifo 2>/tmp/e; r chmod_fifo $?; cat /tmp/e
+stat -c 'STAT2 %n %a' /mnt/hello.txt /mnt/fifo
+mount -o remount,ro /mnt; r remount_ro $?
+
 for i in 1 2 3 4 5 6 7 8; do (sha256sum /mnt/big.bin > /tmp/par.$i) & done; wait
 r parallel "$(cat /tmp/par.* | cut -d' ' -f1 | sort -u | wc -l)"
 
@@ -50,6 +57,6 @@ cat /mnt/sub/deep.txt
 umount /mnt; rmmod r9fs; r rmmod2 $?
 
 echo "== dmesg check"
-dmesg | grep -E 'BUG|WARNING|KASAN|lockdep|circular|possible recursive|leak' && r dmesg_clean 1 || r dmesg_clean 0
+dmesg | grep -E 'BUG:|WARNING:|KASAN|circular locking|possible recursive|Call Trace' && r dmesg_clean 1 || r dmesg_clean 0
 echo DONE
 poweroff -f

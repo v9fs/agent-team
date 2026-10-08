@@ -5,7 +5,7 @@
 | Item | Value |
 | --- | --- |
 | Kernel base | mainline `0c2669a9f4a1d607e7591ae50ccf3c432a0aff08` |
-| r9fs series | `docs/patches/linux-r9fs/0001..0004`; branch head `05b7336f354e52aedfe91da5df98511fca5a7580` (tree `e37d420a1fe7444e8deb7d9d6a1121196d813e16`, reproduced by `git am`) |
+| r9fs series | `docs/patches/linux-r9fs/0001..0005`; branch head `6231afc3aed815be1e6a6b2ec8df3f99552d8a51` (tree `51e14ad12ab36e25168cf13568bfcb52d3e588a2`, reproduced by `git am`) |
 | Toolchain | `LLVM=1`, rustc 1.99.0 (`RUSTUP_TOOLCHAIN=stable`) |
 | Config | `CONFIG_RUST=y`, `CONFIG_R9FS_FS=m`, `CONFIG_KASAN=y`, `CONFIG_PROVE_LOCKING=y`, `CONFIG_FRAME_WARN=4096`, C `9P_FS`/`NET_9P`/`NET_9P_VIRTIO` = m (not loaded) |
 | VMM | QEMU, TCG (`-accel tcg`), `-virtfs local,path=/tmp/share,mount_tag=share,security_model=none` |
@@ -41,11 +41,15 @@ diff /tmp/host.manifest guest.manifest
 
 The guest computes its manifest with the same reducer, running over the r9fs mount.
 The host manifest comes from the host file system directly, so the two sides are
-obtained independently. Artifacts: `r9fs-virtio-smoke.log` (full serial console) and
-`r9fs-virtio-smoke.host-manifest.txt`. The fixture `big.bin` is random, so a rerun
+obtained independently. Committed artifact: `r9fs-virtio-smoke.host-manifest.txt`.
+The serial console log is a raw runner log (`docs/reports/**/*.log` is gitignored).
+The results below are copied from it. The fixture `big.bin` is random, so a rerun
 produces different hashes. The diff is the measured result, not the hash values.
 
 ## Results
+
+The results are from the run on 0001..0005. The first run on 0001..0004 gave the same
+results, except for the `remount,rw` rows, which were added after review.
 
 | Check | Observation | Verdict |
 | --- | --- | --- |
@@ -54,15 +58,17 @@ produces different hashes. The diff is the measured result, not the hash values.
 | Readdir across batches | `ls /mnt/many | wc -l` = 600 at `msize=65536` | pass |
 | `stat` | `hello.txt 11 757411 1 644`, `sub 4096 757241 2 755`, `link 9 757413 1 777`, `fifo 0 757416 1 644`; host `stat` identical (size, inode, nlink, mode) | pass |
 | Types | regular, directory, symbolic link, fifo reported by guest `stat -c %F` | pass |
-| `df` | guest 265625940 / 15043320 / 250566240 KiB; host 265625944 / 15043320 / 250566240 | pass (4 KiB rounding on total) |
+| `df` | guest 265625940 / 15043320 / 250566240 KiB; host 265625944 / 15043320 / 250566240 (0001..0004 run, both sides sampled within seconds) | pass (4 KiB rounding on total) |
 | Symlink follow / dangling / missing | `cat link` = `hello r9fs`; dangling rc=1; missing name rc=1 | pass |
 | Negative: unknown tag | `mount -t r9fs nosuchtag` → `No such file or directory` | pass |
 | Negative: bad option | `-o bogus=1` and `-o trans=tcp` → `Invalid argument`, dmesg `r9fs: unsupported mount option` | pass |
 | Negative: second mount of a claimed tag | `Device or resource busy` | pass |
 | Negative: writes | `touch`, `>>`, `mkdir` → `Read-only file system`; mount shows `ro` | pass |
+| Negative: `remount,rw` | `mount -o remount,rw /mnt` → `Read-only file system`; `/proc/mounts` still `ro` | pass |
+| Negative: setattr after remount attempt | `chmod 600` on `hello.txt` and `fifo` → `Read-only file system`; `stat %a` still 644 for both | pass |
 | Parallel reads | 8 concurrent `sha256sum big.bin` → 1 distinct digest | pass |
 | Lifecycle | umount, remount, rmmod, insmod, mount, read, umount, rmmod all rc=0 | pass |
-| Sanitizers | no `BUG:`, `WARNING:`, `KASAN`, `circular locking`, `possible recursive`, or `Call Trace` in the console. The init script's `dmesg_clean rc=1` is a false positive: it matched the boot banner `RCU lockdep checking is enabled` | pass |
+| Sanitizers | no `BUG:`, `WARNING:`, `KASAN`, `circular locking`, `possible recursive`, or `Call Trace` in the full console. In both runs the init script's own check reported `dmesg_clean rc=1`. That is a false positive: its pattern matched the boot banner `RCU lockdep checking is enabled`. The committed script uses the narrower pattern | pass |
 
 ## Discriminating observations
 
@@ -74,10 +80,12 @@ produces different hashes. The diff is the measured result, not the hash values.
 - A read path that dropped or reordered chunks larger than `msize` would change the
   `big.bin` hash. So would a broken bounce buffer.
 - Synthetic attributes would not match the host inode numbers or nlink.
+- Without the `reconfigure` op, `remount,rw` succeeded and `simple_setattr` changed the
+  in-memory mode. The `remount_rw` and `chmod` rows catch that.
 
 ## Outside the claim
 
 Not tested: writes of any kind, mmap/exec, page cache, xattrs/ACLs, the `v9fs/test`
 harness suites, KVM, hot-unplug of the device while mounted or during an RPC, a
-hostile or malformed 9P server, signal interruption of a stuck request, multiple
+hostile or malformed 9P server (no `Rlerror` errno injection was run), signal interruption of a stuck request, multiple
 virtio-9p devices, coexistence with the C `9pnet_virtio` driver, and performance.

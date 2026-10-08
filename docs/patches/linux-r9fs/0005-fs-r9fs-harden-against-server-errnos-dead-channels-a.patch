@@ -1,0 +1,274 @@
+From 6231afc3aed815be1e6a6b2ec8df3f99552d8a51 Mon Sep 17 00:00:00 2001
+From: Cursor Agent <cursoragent@cursor.com>
+Date: Thu, 8 Oct 2026 14:34:09 +0000
+Subject: [PATCH] fs: r9fs: harden against server errnos, dead channels and
+ remount,rw
+
+Independent review found four issues in the r9fs series:
+
+- Rlerror codes from 512 up are kernel-internal (ERESTARTSYS,
+  EIOCBQUEUED); a server returning EIOCBQUEUED for a read hits the
+  BUG_ON in new_sync_read. Accept only 1..511 and map the rest to EIO.
+- After a failed kick the request stays posted, but release() freed
+  tbuf/rbuf. Keep the buffers of a dead channel until the Channel is
+  dropped, which follows device reset and del_vqs in remove.
+- Without a reconfigure op, mount -o remount,rw cleared SB_RDONLY and
+  simple_setattr then changed in-memory attributes only. Force
+  SB_RDONLY in the abstraction, reject remount,rw with EROFS and make
+  setattr return EROFS for every inode type.
+- lookup and init_root accepted inodes of another superblock of the
+  same type, which could outlive that superblock's s_fs_info. Reject
+  them with EIO.
+
+Also clunk the fid if allocating the open file fails, treat a walk
+reply with more qids than names as EIO, delete the virtqueues before
+reclaiming driver data on post_probe failure and restrict R9FS_FS to
+64BIT.
+---
+ fs/r9fs/Kconfig              |  2 +-
+ fs/r9fs/client.rs            |  7 ++++++-
+ fs/r9fs/r9fs.rs              | 10 ++++++----
+ fs/r9fs/transport.rs         | 14 +++++++++++---
+ rust/kernel/fs/filesystem.rs | 22 ++++++++++++++++------
+ rust/kernel/fs/inode.rs      | 23 ++++++++++++++++++++++-
+ rust/kernel/virtio.rs        |  5 ++++-
+ 7 files changed, 66 insertions(+), 17 deletions(-)
+
+diff --git a/fs/r9fs/Kconfig b/fs/r9fs/Kconfig
+index 6a26c1987..12a0feecf 100644
+--- a/fs/r9fs/Kconfig
++++ b/fs/r9fs/Kconfig
+@@ -1,7 +1,7 @@
+ # SPDX-License-Identifier: GPL-2.0-only
+ config R9FS_FS
+ 	tristate "r9fs: Rust 9P2000.L file system over virtio (EXPERIMENTAL)"
+-	depends on RUST && VIRTIO=y
++	depends on RUST && VIRTIO=y && 64BIT
+ 	help
+ 	  A read-only 9P2000.L client file system written in Rust, using its
+ 	  own virtio-9p transport. It is independent of the C v9fs (9P_FS)
+diff --git a/fs/r9fs/client.rs b/fs/r9fs/client.rs
+index 5e38b3a3f..6eb83fff1 100644
+--- a/fs/r9fs/client.rs
++++ b/fs/r9fs/client.rs
+@@ -120,7 +120,12 @@ pub(crate) fn walk(&self, fid: u32, name: Option<&[u8]>) -> Result<u32> {
+                 Ok(n)
+             },
+         )?;
+-        if nwqid != nwname {
++        if nwqid > nwname {
++            // Malformed reply; the server may still have bound `newfid`.
++            self.clunk(newfid);
++            return Err(EIO);
++        }
++        if nwqid < nwname {
+             // A partial walk does not create `newfid`.
+             return Err(ENOENT);
+         }
+diff --git a/fs/r9fs/r9fs.rs b/fs/r9fs/r9fs.rs
+index 357f4ec4d..8a108bf45 100644
+--- a/fs/r9fs/r9fs.rs
++++ b/fs/r9fs/r9fs.rs
+@@ -174,8 +174,7 @@ fn fill_super(sb: &mut NewSuperBlock<'_, Self>, params: &MountParams) -> Result<
+             }
+         }
+         sb.set_magic(V9FS_MAGIC)
+-            .set_blocksize_bits(12)
+-            .set_read_only();
++            .set_blocksize_bits(12);
+         Ok(KBox::new(Session::connect(&opts)?, GFP_KERNEL)?)
+     }
+ 
+@@ -198,8 +197,11 @@ fn open(inode: &INode<Self>, _flags: u32) -> Result<KBox<OpenFile>> {
+         let session = inode.super_block().data();
+         let fid = session.walk(inode.data().fid, None)?;
+         // Read-only mount: always open for reading (`O_RDONLY`).
+-        match session.lopen(fid, 0) {
+-            Ok((_, iounit)) => Ok(KBox::new(OpenFile { fid, iounit }, GFP_KERNEL)?),
++        let opened = session
++            .lopen(fid, 0)
++            .and_then(|(_, iounit)| Ok(KBox::new(OpenFile { fid, iounit }, GFP_KERNEL)?));
++        match opened {
++            Ok(f) => Ok(f),
+             Err(e) => {
+                 session.clunk(fid);
+                 Err(e)
+diff --git a/fs/r9fs/transport.rs b/fs/r9fs/transport.rs
+index 46b76e50c..4b17c575c 100644
+--- a/fs/r9fs/transport.rs
++++ b/fs/r9fs/transport.rs
+@@ -73,11 +73,17 @@ pub(crate) fn claim(tag: &[u8], msize: u32) -> Result<Arc<Channel>> {
+     }
+ 
+     /// Releases a claim and frees the request buffers.
++    ///
++    /// A dead channel may still have a request posted to the device, so its buffers are kept
++    /// until the `Channel` is dropped, which only happens after the driver's `remove` has reset
++    /// the device and deleted the queue.
+     pub(crate) fn release(&self) {
+         let mut st = self.state.lock();
+         st.in_use = false;
+-        st.tbuf = KVec::new();
+-        st.rbuf = KVec::new();
++        if !st.dead {
++            st.tbuf = KVec::new();
++            st.rbuf = KVec::new();
++        }
+     }
+ 
+     /// Shrinks the buffers after version negotiation lowered `msize`.
+@@ -141,9 +147,11 @@ pub(crate) fn rpc<R>(
+         let mut body = Dec::new(&reply[HDR..rsize]);
+         if rtype == RLERROR {
+             let ecode = body.u32()?;
++            // Errnos from 512 up are kernel-internal (`ERESTARTSYS`, `EIOCBQUEUED`, ...) and must
++            // never be returned to the VFS on behalf of a server.
+             return Err(i32::try_from(ecode)
+                 .ok()
+-                .filter(|e| (1..4096).contains(e))
++                .filter(|e| (1..512).contains(e))
+                 .map(|e| Error::from_errno(-e))
+                 .unwrap_or(EIO));
+         }
+diff --git a/rust/kernel/fs/filesystem.rs b/rust/kernel/fs/filesystem.rs
+index 928f9b1ac..ba440c2d3 100644
+--- a/rust/kernel/fs/filesystem.rs
++++ b/rust/kernel/fs/filesystem.rs
+@@ -202,12 +202,6 @@ pub fn set_blocksize_bits(&mut self, bits: u8) -> &mut Self {
+         self
+     }
+ 
+-    /// Marks the superblock read-only.
+-    pub fn set_read_only(&mut self) -> &mut Self {
+-        // SAFETY: The superblock is exclusively ours during `fill_super`.
+-        unsafe { (*self.sb).s_flags |= bindings::SB_RDONLY };
+-        self
+-    }
+ }
+ 
+ /// A registered file system type.
+@@ -267,6 +261,7 @@ impl<T: FileSystem> Tables<T> {
+         free: Some(Self::free),
+         parse_param: Some(Self::parse_param),
+         get_tree: Some(Self::get_tree),
++        reconfigure: Some(Self::reconfigure),
+         ..pin_init::zeroed()
+     };
+ 
+@@ -367,6 +362,8 @@ impl<T: FileSystem> Tables<T> {
+ 
+             // SAFETY: The new superblock is exclusively ours until `fill_super` returns.
+             unsafe {
++                // These abstractions have no write paths, so every mount is read-only.
++                (*sb).s_flags |= bindings::SB_RDONLY;
+                 (*sb).s_op = &Self::SUPER_OPS;
+                 (*sb).s_maxbytes = i64::MAX;
+                 (*sb).s_time_gran = 1;
+@@ -384,6 +381,9 @@ impl<T: FileSystem> Tables<T> {
+             // SAFETY: `s_fs_info` is now initialised for type `T`.
+             let sbref = unsafe { SuperBlock::<T>::from_raw(sb) };
+             let root = T::init_root(sbref)?;
++            if !core::ptr::eq(root.super_block(), sbref) {
++                return Err(EIO);
++            }
+             // SAFETY: `d_make_root` consumes the inode reference, dropping it on failure.
+             let dentry = unsafe { bindings::d_make_root(ARef::into_raw(root).as_ptr().cast()) };
+             if dentry.is_null() {
+@@ -399,6 +399,16 @@ impl<T: FileSystem> Tables<T> {
+         }
+     }
+ 
++    unsafe extern "C" fn reconfigure(fc: *mut bindings::fs_context) -> c_int {
++        let rdonly = bindings::SB_RDONLY as c_uint;
++        // SAFETY: The VFS passes a valid reconfiguration context.
++        let (flags, mask) = unsafe { ((*fc).sb_flags, (*fc).sb_flags_mask) };
++        if mask & rdonly != 0 && flags & rdonly == 0 {
++            return EROFS.to_errno();
++        }
++        0
++    }
++
+     unsafe extern "C" fn kill_sb(sb: *mut bindings::super_block) {
+         // SAFETY: The VFS passes a superblock of this type being torn down. Inodes are evicted
+         // (and may still use `s_fs_info`) inside `kill_anon_super`.
+diff --git a/rust/kernel/fs/inode.rs b/rust/kernel/fs/inode.rs
+index 3f680ca86..ac7f6a0cc 100644
+--- a/rust/kernel/fs/inode.rs
++++ b/rust/kernel/fs/inode.rs
+@@ -218,9 +218,11 @@ pub fn init(self, params: INodeParams<T::INodeData>) -> Result<ARef<INode<T>>> {
+                     (*inode).i_op = &Tables::<T>::LINK_IOPS;
+                 }
+                 INodeType::Chr(dev) | INodeType::Blk(dev) => {
++                    (*inode).i_op = &Tables::<T>::FILE_IOPS;
+                     bindings::init_special_inode(inode, mode, dev);
+                 }
+                 INodeType::Fifo | INodeType::Sock => {
++                    (*inode).i_op = &Tables::<T>::FILE_IOPS;
+                     bindings::init_special_inode(inode, mode, 0);
+                 }
+             }
+@@ -315,16 +317,31 @@ pub fn emit(&mut self, name: &[u8], ino: u64, dtype: u32) -> bool {
+ impl<T: FileSystem> Tables<T> {
+     const DIR_IOPS: bindings::inode_operations = bindings::inode_operations {
+         lookup: Some(Self::lookup),
++        setattr: Some(Self::setattr),
+         ..pin_init::zeroed()
+     };
+ 
+-    const FILE_IOPS: bindings::inode_operations = pin_init::zeroed();
++    const FILE_IOPS: bindings::inode_operations = bindings::inode_operations {
++        setattr: Some(Self::setattr),
++        ..pin_init::zeroed()
++    };
+ 
+     const LINK_IOPS: bindings::inode_operations = bindings::inode_operations {
+         get_link: Some(Self::get_link),
++        setattr: Some(Self::setattr),
+         ..pin_init::zeroed()
+     };
+ 
++    // Without this, `notify_change` falls back to `simple_setattr` and would change only the
++    // in-memory inode.
++    unsafe extern "C" fn setattr(
++        _idmap: *mut bindings::mnt_idmap,
++        _dentry: *mut bindings::dentry,
++        _attr: *mut bindings::iattr,
++    ) -> c_int {
++        EROFS.to_errno()
++    }
++
+     const DIR_FOPS: bindings::file_operations = bindings::file_operations {
+         open: Some(Self::open),
+         release: Some(Self::release),
+@@ -355,6 +372,10 @@ impl<T: FileSystem> Tables<T> {
+             core::slice::from_raw_parts(qstr.name, qstr.__bindgen_anon_1.__bindgen_anon_1.len as usize)
+         };
+         let inode = match T::lookup(parent, name) {
++            // An inode of another superblock could outlive its `s_fs_info`.
++            Ok(Some(i)) if !core::ptr::eq(i.super_block(), parent.super_block()) => {
++                return EIO.to_ptr()
++            }
+             Ok(Some(i)) => ARef::into_raw(i).as_ptr().cast(),
+             Ok(None) => core::ptr::null_mut(),
+             Err(e) => return e.to_ptr(),
+diff --git a/rust/kernel/virtio.rs b/rust/kernel/virtio.rs
+index 1110f9b39..3ec647551 100644
+--- a/rust/kernel/virtio.rs
++++ b/rust/kernel/virtio.rs
+@@ -271,9 +271,12 @@ unsafe impl<T: Driver> Sync for Registration<T> {}
+         // `remove_callback`.
+         let r = T::post_probe(dev, unsafe { <T::Data as ForeignOwnable>::borrow(p) });
+         if r.is_err() {
+-            // SAFETY: The device is valid; resetting quiesces callbacks before reclaiming.
++            // SAFETY: The device is valid. Reset alone does not synchronise callbacks on every
++            // transport; deleting the queues frees their interrupts, so no callback can still be
++            // running or start once `priv` is cleared.
+             unsafe {
+                 bindings::virtio_reset_device(vdev);
++                bindings::virtio_del_vqs(vdev);
+                 (*vdev).priv_ = core::ptr::null_mut();
+             }
+             // SAFETY: Reclaimed exactly once; nothing else can observe `p` any more.
+-- 
+2.43.0
+

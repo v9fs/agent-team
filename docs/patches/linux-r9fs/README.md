@@ -2,11 +2,11 @@
 
 Kernel branch `cursor/r9fs-rust-virtio-f6e3` for `v9fs/linux`, based on mainline
 `0c2669a9f4a1d607e7591ae50ccf3c432a0aff08` (Merge tag 'soc-fixes-7.3-2', 2026-10-08).
-Branch head: `05b7336f354e52aedfe91da5df98511fca5a7580`.
+Branch head: `6231afc3aed815be1e6a6b2ec8df3f99552d8a51` (tree `51e14ad12ab36e25168cf13568bfcb52d3e588a2`).
 
 Pushing that branch to `v9fs/linux` was refused (`403: Permission to v9fs/linux.git
 denied to cursor[bot]`). This series is a byte-exact copy of the branch made with
-`git format-patch 0c2669a9f..05b7336f3`, so a maintainer can recreate it:
+`git format-patch 0c2669a9f..6231afc3a`, so a maintainer can recreate it:
 
 ```bash
 git checkout -b cursor/r9fs-rust-virtio-f6e3 0c2669a9f4a1d607e7591ae50ccf3c432a0aff08
@@ -23,6 +23,7 @@ approval (`AGENTS.md`, D0004).
 | 0002 | rust: virtio: add a minimal virtio driver binding | `rust/kernel/virtio.rs`, `rust/helpers/virtio.c`, `bindings_helper.h` |
 | 0003 | rust: fs: add file system registration, superblock and inode abstractions | `rust/kernel/fs{,/filesystem,/inode}.rs`, `rust/helpers/fs.c` |
 | 0004 | fs: r9fs: add read-only Rust 9P2000.L file system over virtio | `fs/r9fs/`, `fs/Kconfig`, `fs/Makefile` |
+| 0005 | fs: r9fs: harden against server errnos, dead channels and remount,rw | review response: `fs/r9fs/`, `rust/kernel/{fs/*,virtio}.rs` |
 
 Note: `rust/helpers/completion.c` is added in 0002, not 0001, so 0001 alone does not
 link `reinit()`. The series is bisectable at 0002 and later.

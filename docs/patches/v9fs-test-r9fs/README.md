@@ -1,8 +1,8 @@
 # v9fs/test: `r9fs` suite (harness patches)
 
-Three commits for `v9fs/test` on top of `main` `922aacebb637a7e1f366877f039c81073f29a6aa`.
-Local branch `cursor/r9fs-suite-f6e3`, head `1a5a0aa1f2b5e0f983c77de6ccc578e0acf55706`
-(tree `bd5562af4d62cdc7075dea47de4c3e7910704393`, reproduced by `git am`). The 0001..0002
+Four commits for `v9fs/test` on top of `main` `922aacebb637a7e1f366877f039c81073f29a6aa`.
+Local branch `cursor/r9fs-suite-f6e3`, head `0a17192a471680fe90cf13ce6e97f0762190f424`
+(tree `bfe9f9d3f58516256c479d235a1cc6679ed12436`, reproduced by `git am`). The 0001..0002
 head was `efba6afa718a` (tree `5730052fe94a`). Pushing to
 `v9fs/test` was refused (`403: Permission to v9fs/test.git denied to cursor[bot]`).
 
@@ -16,6 +16,7 @@ git am docs/patches/v9fs-test-r9fs/000*.patch
 | 0001 | `qemu.bash` (devices `r9share` and throttled `r9slow` when `R9FS_SHARE` is set), `scripts/v9fs-run-tests` + `scripts/v9fs-build-initrd` (`r9fs` suite, klog enforced), new `scripts/v9fs-r9fs-tests`, `scripts/v9fs-prepare-r9fs`, `scripts/v9fs-kmod.c`, `scripts/v9fs-build-r9fs-kernel`; README/CHANGES/TODO |
 | 0002 | `scripts/v9fs-r9fs-tests`: time the unbind check with shell builtins on guest tmpfs, and record the timings instead of asserting on them |
 | 0003 | `.github/workflows/r9fs.yml` (manual, `ubuntu-24.04-arm`): toolchain (`scripts/v9fs-install-rust-toolchain`), Rust kernel build, `v9fs-run-tests r9fs`, logs artifact; `R9FS_KO` override in prepare; `r9fs.log` kept in `logs/<ts>/` |
+| 0004 | `scripts/v9fs-r9fs-tests`: the reference manifest, statfs and checksum come from C v9fs mounting `r9share` itself (same msize) before the device moves to r9fs. Harness CI's QEMU 10.0 remaps qid paths on `hostshare`, so inode numbers through `hostshare` differ from `r9share` whatever the client |
 
 The suite runs the way the existing suites do. The guest boots the harness initrd, mounts
 the container root over C v9fs (`hostshare`) and runs the suite in the Debian chroot. The

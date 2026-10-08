@@ -60,8 +60,8 @@ jobs:
         run: |
           set -euo pipefail
           am() { git -C "$1" -c user.name=r9fs-ci -c user.email=r9fs-ci@invalid am -q "${@:2}"; }
-          am test agent-team/docs/patches/v9fs-test-r9fs/0*.patch
-          am linux agent-team/docs/patches/linux-r9fs/0*.patch
+          am test "$GITHUB_WORKSPACE"/agent-team/docs/patches/v9fs-test-r9fs/0*.patch
+          am linux "$GITHUB_WORKSPACE"/agent-team/docs/patches/linux-r9fs/0*.patch
           git -C test log --oneline "$TEST_BASE"..HEAD
           git -C linux log --oneline "$LINUX_BASE"..HEAD
           echo "test tree $(git -C test rev-parse HEAD^{tree}); linux tree $(git -C linux rev-parse HEAD^{tree})"

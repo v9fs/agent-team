@@ -9,6 +9,7 @@ name: r9fs harness proof (pre-landing)
 on:
   workflow_dispatch:
   push:
+    branches: [main]
     paths:
       - "docs/patches/linux-r9fs/**"
       - "docs/patches/v9fs-test-r9fs/**"

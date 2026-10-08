@@ -38,6 +38,8 @@ mkdir /mnt/d 2>/tmp/e; r mkdir $?; cat /tmp/e
 
 mount -o remount,rw /mnt 2>/tmp/e; r remount_rw $?; cat /tmp/e
 grep ' /mnt ' /proc/mounts
+mount -o remount,noatime /mnt 2>/tmp/e; r remount_noatime $?; cat /tmp/e
+grep ' /mnt ' /proc/mounts
 chmod 600 /mnt/hello.txt 2>/tmp/e; r chmod_after_remount $?; cat /tmp/e
 chmod 600 /mnt/fifo 2>/tmp/e; r chmod_fifo $?; cat /tmp/e
 stat -c 'STAT2 %n %a' /mnt/hello.txt /mnt/fifo

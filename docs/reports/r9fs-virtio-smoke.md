@@ -5,7 +5,7 @@
 | Item | Value |
 | --- | --- |
 | Kernel base | mainline `0c2669a9f4a1d607e7591ae50ccf3c432a0aff08` |
-| r9fs series | `docs/patches/linux-r9fs/0001..0005`; branch head `6231afc3aed815be1e6a6b2ec8df3f99552d8a51` (tree `51e14ad12ab36e25168cf13568bfcb52d3e588a2`, reproduced by `git am`) |
+| r9fs series | `docs/patches/linux-r9fs/0001..0006`; branch head `9ee8f93a3439077e2946d5880f3e31cc5ef1255d` (tree `e8b49fb97c10828b28df80e117c5f68ba99bd66e`, reproduced by `git am`) |
 | Toolchain | `LLVM=1`, rustc 1.99.0 (`RUSTUP_TOOLCHAIN=stable`) |
 | Config | `CONFIG_RUST=y`, `CONFIG_R9FS_FS=m`, `CONFIG_KASAN=y`, `CONFIG_PROVE_LOCKING=y`, `CONFIG_FRAME_WARN=4096`, C `9P_FS`/`NET_9P`/`NET_9P_VIRTIO` = m (not loaded) |
 | VMM | QEMU, TCG (`-accel tcg`), `-virtfs local,path=/tmp/share,mount_tag=share,security_model=none` |
@@ -48,8 +48,10 @@ produces different hashes. The diff is the measured result, not the hash values.
 
 ## Results
 
-The results are from the run on 0001..0005. The first run on 0001..0004 gave the same
-results, except for the `remount,rw` rows, which were added after review.
+The results are from the run on 0001..0006. The earlier runs on 0001..0004 and 0001..0005
+gave the same results, except for the remount rows, which were added after review. On
+0005, `remount,rw` failed with EROFS. 0006 switched to the erofs/squashfs convention, so it
+now succeeds and the mount stays `ro`.
 
 | Check | Observation | Verdict |
 | --- | --- | --- |
@@ -64,7 +66,7 @@ results, except for the `remount,rw` rows, which were added after review.
 | Negative: bad option | `-o bogus=1` and `-o trans=tcp` → `Invalid argument`, dmesg `r9fs: unsupported mount option` | pass |
 | Negative: second mount of a claimed tag | `Device or resource busy` | pass |
 | Negative: writes | `touch`, `>>`, `mkdir` → `Read-only file system`; mount shows `ro` | pass |
-| Negative: `remount,rw` | `mount -o remount,rw /mnt` → `Read-only file system`; `/proc/mounts` still `ro` | pass |
+| Negative: `remount,rw` | `mount -o remount,rw /mnt` rc=0 and `/proc/mounts` still `ro,relatime`; `remount,noatime` rc=0 and the mount shows `ro,noatime` | pass |
 | Negative: setattr after remount attempt | `chmod 600` on `hello.txt` and `fifo` → `Read-only file system`; `stat %a` still 644 for both | pass |
 | Parallel reads | 8 concurrent `sha256sum big.bin` → 1 distinct digest | pass |
 | Lifecycle | umount, remount, rmmod, insmod, mount, read, umount, rmmod all rc=0 | pass |
@@ -80,12 +82,14 @@ results, except for the `remount,rw` rows, which were added after review.
 - A read path that dropped or reordered chunks larger than `msize` would change the
   `big.bin` hash. So would a broken bounce buffer.
 - Synthetic attributes would not match the host inode numbers or nlink.
-- Without the `reconfigure` op, `remount,rw` succeeded and `simple_setattr` changed the
-  in-memory mode. The `remount_rw` and `chmod` rows catch that.
+- Without the `reconfigure` op, `remount,rw` cleared `ro` and `simple_setattr` changed the
+  in-memory mode. The `/proc/mounts` and `chmod`/`stat` rows catch that.
 
 ## Outside the claim
 
 Not tested: writes of any kind, mmap/exec, page cache, xattrs/ACLs, the `v9fs/test`
 harness suites, KVM, hot-unplug of the device while mounted or during an RPC, a
-hostile or malformed 9P server (no `Rlerror` errno injection was run), signal interruption of a stuck request, multiple
+hostile or malformed 9P server (no `Rlerror` errno injection was run), virtio-mmio and
+probe-failure paths (the review fixes in 0005/0006 for those, and for kick failure and
+foreign-superblock inodes, are code-review only), signal interruption of a stuck request, multiple
 virtio-9p devices, coexistence with the C `9pnet_virtio` driver, and performance.

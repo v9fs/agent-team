@@ -1,0 +1,140 @@
+name: r9fs harness proof (pre-landing)
+
+# Runs the v9fs/test r9fs suite on the patch series recorded here, before they land on
+# v9fs/linux and v9fs/test (both refuse pushes from this forge's agents). The kernel and
+# harness are rebuilt from pinned bases + docs/patches, and the run uses the harness's own
+# scripts (v9fs/test patch 0003). Negative control: r9fs.ko built from the slice-1 r9fs
+# sources (patch 0006) on the same Image must fail exactly the checks that discriminate it.
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "docs/patches/linux-r9fs/**"
+      - "docs/patches/v9fs-test-r9fs/**"
+      - ".github/workflows/r9fs-harness.yml"
+  pull_request:
+    paths:
+      - "docs/patches/linux-r9fs/**"
+      - "docs/patches/v9fs-test-r9fs/**"
+      - ".github/workflows/r9fs-harness.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: r9fs-harness-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  r9fs:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 240
+    env:
+      LINUX_BASE: 0c2669a9f4a1d607e7591ae50ccf3c432a0aff08
+      TEST_BASE: 922aacebb637a7e1f366877f039c81073f29a6aa
+      CONTROL_PATCH: "6"
+      CONTROL_EXPECTED_FAILS: "kill-stalled-reader manifest-vs-v9fs unbind-fails-posted-read"
+      V9FS_DOCKER_IMAGE: ghcr.io/v9fs/docker:latest
+    steps:
+      - name: Checkout agent-team
+        uses: actions/checkout@v7
+        with:
+          path: agent-team
+
+      - name: Checkout v9fs/test base
+        uses: actions/checkout@v7
+        with:
+          repository: v9fs/test
+          ref: ${{ env.TEST_BASE }}
+          path: test
+
+      - name: Checkout v9fs/linux base
+        uses: actions/checkout@v7
+        with:
+          repository: v9fs/linux
+          ref: ${{ env.LINUX_BASE }}
+          path: linux
+
+      - name: Apply patch series
+        run: |
+          set -euo pipefail
+          am() { git -C "$1" -c user.name=r9fs-ci -c user.email=r9fs-ci@invalid am -q "${@:2}"; }
+          am test agent-team/docs/patches/v9fs-test-r9fs/0*.patch
+          am linux agent-team/docs/patches/linux-r9fs/0*.patch
+          git -C test log --oneline "$TEST_BASE"..HEAD
+          git -C linux log --oneline "$LINUX_BASE"..HEAD
+          echo "test tree $(git -C test rev-parse HEAD^{tree}); linux tree $(git -C linux rev-parse HEAD^{tree})"
+
+      - name: Install Rust kernel toolchain
+        run: test/scripts/v9fs-install-rust-toolchain
+
+      - name: Build arm64 Image + r9fs.ko
+        run: test/scripts/v9fs-build-r9fs-kernel "$GITHUB_WORKSPACE/linux" "$GITHUB_WORKSPACE/test/kernel/.build"
+
+      - name: Build control r9fs.ko (slice-1 sources, same Image)
+        run: |
+          set -euo pipefail
+          cd linux
+          n="$(git rev-list --count "$LINUX_BASE"..HEAD)"
+          ctl="$(git rev-parse "HEAD~$((n - CONTROL_PATCH))")"
+          echo "control fs/r9fs from $ctl: $(git log -1 --format=%s "$ctl")"
+          files="$(git ls-tree --name-only "$ctl" fs/r9fs/)"
+          for f in $files; do git show "$ctl:$f" > "$f"; done
+          # Keep the tree clean for setlocalversion so the module's vermagic matches the Image.
+          git update-index --assume-unchanged $files
+          mk=(make O="$GITHUB_WORKSPACE/test/kernel/.build" ARCH=arm64 LLVM=1 -j"$(nproc)")
+          "${mk[@]}" fs/r9fs/r9fs.ko
+          mkdir -p "$GITHUB_WORKSPACE/test/kernel/control"
+          cp "$GITHUB_WORKSPACE/test/kernel/.build/fs/r9fs/r9fs.ko" "$GITHUB_WORKSPACE/test/kernel/control/r9fs.ko"
+          git update-index --no-assume-unchanged $files
+          git checkout -- fs/r9fs
+          "${mk[@]}" fs/r9fs/r9fs.ko
+          modinfo -F vermagic "$GITHUB_WORKSPACE/test/kernel/.build/fs/r9fs/r9fs.ko" "$GITHUB_WORKSPACE/test/kernel/control/r9fs.ko"
+          sha256sum "$GITHUB_WORKSPACE/test/kernel/.build/fs/r9fs/r9fs.ko" "$GITHUB_WORKSPACE/test/kernel/control/r9fs.ko" \
+            "$GITHUB_WORKSPACE/test/kernel/.build/arch/arm64/boot/Image"
+
+      - name: Run r9fs suite (current)
+        working-directory: test
+        run: |
+          mkdir -p tmp
+          docker run --rm --privileged --label v9fs.harness=v9fs-test --user 0:0 \
+            -e KERNELBUILD=/workspaces/kernel/.build -e TIMESTAMP=r9fs-current \
+            -v "$PWD:/home/v9fs-test/test" -v "$PWD/kernel:/workspaces/kernel" -v "$PWD/tmp:/workspaces/tmp" \
+            -w /home/v9fs-test/test "${V9FS_DOCKER_IMAGE}" \
+            bash -lc "./scripts/v9fs-run-tests r9fs"
+
+      - name: Run r9fs suite (control must fail exactly the discriminating checks)
+        working-directory: test
+        run: |
+          set -uo pipefail
+          docker run --rm --privileged --label v9fs.harness=v9fs-test --user 0:0 \
+            -e KERNELBUILD=/workspaces/kernel/.build -e TIMESTAMP=r9fs-control \
+            -e R9FS_KO=/workspaces/kernel/control/r9fs.ko \
+            -v "$PWD:/home/v9fs-test/test" -v "$PWD/kernel:/workspaces/kernel" -v "$PWD/tmp:/workspaces/tmp" \
+            -w /home/v9fs-test/test "${V9FS_DOCKER_IMAGE}" \
+            bash -lc "./scripts/v9fs-run-tests r9fs"
+          rc=$?
+          fails="$(sed -n 's/^FAIL \([^:]*\).*/\1/p' logs/r9fs-control/r9fs.log | sort | paste -sd' ')"
+          klog_fail="$(python3 -c 'import json;print(json.load(open("logs/r9fs-control/klog.json"))["fail"])')"
+          echo "control: rc=$rc fails=[$fails] klog_fail=$klog_fail"
+          [ "$rc" -ne 0 ] && [ "$fails" = "$CONTROL_EXPECTED_FAILS" ] && [ "$klog_fail" = 0 ]
+
+      - name: Dump logs on failure
+        if: failure()
+        working-directory: test
+        run: |
+          for f in logs/*/r9fs.log logs/*/klog.json; do echo "---- $f"; cat "$f" || true; done
+          for f in logs/*/qemu.log; do echo "---- $f"; tail -n 200 "$f" || true; done
+
+      - name: Fix log permissions (for artifact upload)
+        if: always()
+        run: sudo chmod -R a+rX test/logs || true
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: r9fs-harness-logs
+          path: test/logs
+          retention-days: 14

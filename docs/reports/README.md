@@ -9,7 +9,7 @@ surface harder to read.
 - `diod-upstream-known-fail.md`: chaos/diod HEAD pin and open-issue vs XFAIL classification.
 - `rust-port-inventory.md` (JSON via `--json`, gitignored): generated fs/9p + net/9p kernel surface vs
   existing Rust abstractions (`scripts/rust-port-inventory.py`; D0003).
-- `r9fs-virtio-smoke.md` (+ `.log`, `.host-manifest.txt`): r9fs QEMU smoke run vs host
+- `r9fs-virtio-smoke.md` (+ `.host-manifest.txt`): r9fs QEMU smoke run vs host
   reference manifest (P0006; D0004).
 
 Do not store credentials, tokens, cookies, secret-bearing session URLs, or raw

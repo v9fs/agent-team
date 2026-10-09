@@ -51,6 +51,30 @@ Guest output: `r9fs-harness/r9fs-ce42b3c7.txt` (current) and
 | `EIO` after unbind, umount, unload | PASS | PASS |
 | guest exit code / `v9fs-scan-klog` (BUG, WARNING, Oops, hung_task) | 0 / 0 hits | 1 / 0 hits |
 
+## GitHub Actions (native arm64)
+
+Run [37861629852](https://github.com/v9fs/agent-team/actions/runs/37861629852) of
+`.github/workflows/r9fs-harness.yml`, agent-team head `477c1d8a`. It ran on
+`ubuntu-24.04-arm` with `ghcr.io/v9fs/docker:latest` (QEMU 10.0.8). It applied
+`linux-r9fs/0001..0009` onto `0c2669a9f4a1` (tree `8d614e9f`) and `v9fs-test-r9fs/0001..0004`
+onto `922aacebb637` (tree `bfe9f9d3`), built the Image and `r9fs.ko` with the harness
+scripts, and ran `v9fs-run-tests r9fs` twice. Image sha256 `2efa7a8f…1732`; both modules'
+vermagic is `7.3.0-rc6-g9461ffbfc9a2`. Logs are in the `r9fs-harness-logs` artifact.
+
+| | Current (`b1496024…`) | Control (`f4507503…`, `fs/r9fs` at patch 0006) |
+| --- | --- | --- |
+| Result | 28/28 PASS, guest rc 0 | rc 1; fails exactly `kill-stalled-reader`, `manifest-vs-v9fs`, `unbind-fails-posted-read` |
+| Kill latency | 29 ms | 1777 ms |
+| Bytes after unbind | 0 | 4096 |
+| klog | 0 hits | 0 hits |
+
+Since the local runs, harness patch 0004 changed the reference. The container's QEMU
+remaps qid paths on `hostshare` (an export of `/` spanning several host devices), so
+`hostshare` inode numbers no longer equal `r9share`'s (X0003). The reference manifest,
+statfs and checksum now come from C v9fs mounting `r9share` itself, before the device moves
+to r9fs. That patch also adds the two reference-mount checks, so 28 checks run instead
+of 26.
+
 ## What the discriminating checks show
 
 - **Manifest.** C v9fs uses `qid.path + 2` as the inode number (`QID2INO`). The slice-1
@@ -78,8 +102,8 @@ Guest output: `r9fs-harness/r9fs-ce42b3c7.txt` (current) and
   the reader exited within 10 ms of it in both. The suite records `unbind_ms` and
   `reader_exit_ms` and asserts neither. The first version timed the reader with `awk`
   on the 9p root and gave the same number for the same reason.
-- Not run in Actions: no Rust toolchain in `ghcr.io/v9fs/docker`, no published
-  `r9fs.ko`, and no push access to `v9fs/test` (TODO row in patch 0001).
+- Not run in `v9fs/test` Actions: the patches are not pushed there (403). The proof run is
+  in this forge (above), from the same scripts.
 - Recorded on x86_64 with an emulated arm64 guest and host QEMU 8.2.2, not the
   container's QEMU on an arm64 runner.
 - No KASAN or lockdep in this Image (harness `defconfig`); the slice-1 smoke run covers

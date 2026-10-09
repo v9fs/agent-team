@@ -57,6 +57,9 @@ Authority levels:
 - Required shared gates:
   - this forge: `scripts/check-scaffold.sh`
   - product slices: the named `v9fs/test` workflow, suite, or artifact
+  - product patches recorded under `docs/patches/` because the product repo refuses
+    agent pushes: a pre-landing run of that suite here, from pinned bases plus the
+    patches, including the wrong-kernel negative control (`r9fs-harness.yml` for r9fs)
 - Required negative evidence: `FAIL or XFAIL with the wrong kernel, server, or mount option; do not treat a skipped suite as proof`
 - Performance claim rule: generated, versioned measurement artifact required
 - Proof-ledger owner: `CI/proof owner`

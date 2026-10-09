@@ -1,0 +1,8 @@
+{
+  "name": "v9fs",
+  "repositoryDependencies": [
+    "github.com/v9fs/linux",
+    "github.com/v9fs/test"
+  ],
+  "install": "bash .cursor/cloud-install.sh"
+}

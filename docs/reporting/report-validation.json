@@ -1,0 +1,52 @@
+{
+  "report_date": "2026-10-19",
+  "issue": "https://github.com/v9fs/agent-team/issues/16",
+  "product_snapshot": "3e753717e728d44cf9d5a4fff088f2b5fcfca63f",
+  "source_sha256": "12b16f12218516049ba45e9c30731db48b2b4be9d8c1f1b6af0f295b55e0125e",
+  "template_sha256": "1c5a0f7f237af6869ad7c4b16bfa67c0159618db6416e5cafd586247d98c494e",
+  "pdf_sha256": "7b3c144c824079f2c0c1fb23f0d6cb2353737ca4abdf8dc4284db0b53db81e7d",
+  "pages": 1,
+  "visual_qa": {
+    "status": "completed_by_creator",
+    "scope": "Every final PDF page inspected at 1500-pixel render height; tables, columns, headings, page breaks, references and glyphs checked."
+  },
+  "claim_check": {
+    "status": "creator_source_check_completed",
+    "scope": "Narrative and numerical spot checks against pinned source and retained raw artifacts; historical observations were not rerun as new workload measurements.",
+    "pinned_reference_files": {
+      "docs/project-formulation.md": "9125e1dd533f35b53a925a53c9e4c969947a83241e08ba4d1bf7216552c0834c",
+      "docs/ledgers/proof-ledger.md": "517c983e742adc2f5ad1fa2e82285b7bfcc843a41b798d60478c4a5a5e149764",
+      "docs/plans/5-t0011-squashuser.md": "19b9af6cdd5c5fcbf09d0ac0f253cae93f4926ab104263f5e5aaaa65149447f6",
+      "docs/reports/diod-upstream-known-fail.md": "a5019bbaca0098bdda6fee49261ff33fa78f41a7bcf637fb06a252b6ae1f1856",
+      "docs/ledgers/diod-upstream.md": "0fcc8cb4042545d848a9b1d75e0c8217b5d5ca85d0cbe357d5b135b67629e0df",
+      "docs/ledgers/diod-upstream-open-issues.json": "a96b62bd6cfbb2058a21bda93b78fae6829ad1313aac16056efe047b65e63f92"
+    }
+  },
+  "independent_report_review": "pending; proposal remains draft",
+  "checks": [
+    {
+      "command": [
+        "bash",
+        "scripts/check-scaffold.sh"
+      ],
+      "exit": 0
+    },
+    {
+      "command": [
+        "bash",
+        "scripts/check-diod-upstream-inventory.sh"
+      ],
+      "exit": 0
+    },
+    {
+      "command": [
+        "git",
+        "diff",
+        "--check"
+      ],
+      "exit": 0
+    }
+  ],
+  "product_proof_promotion": "none",
+  "ci": "separate remote result; not inferred from local checks"
+}

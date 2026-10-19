@@ -1,0 +1,10 @@
+{
+  "built_at": "2026-10-19T15:24:12.602029+00:00",
+  "source_sha256": "12b16f12218516049ba45e9c30731db48b2b4be9d8c1f1b6af0f295b55e0125e",
+  "template_sha256": "1c5a0f7f237af6869ad7c4b16bfa67c0159618db6416e5cafd586247d98c494e",
+  "pdf_sha256": "7b3c144c824079f2c0c1fb23f0d6cb2353737ca4abdf8dc4284db0b53db81e7d",
+  "build_context_head": "3e753717e728d44cf9d5a4fff088f2b5fcfca63f",
+  "build_context_dirty": true,
+  "claim_review": "required",
+  "visual_qa": "required"
+}

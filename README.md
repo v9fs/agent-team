@@ -1,5 +1,9 @@
 # v9fs Agent Team
 
+[Project overview and results (PDF)](docs/project-summary.pdf) · [Editable report](docs/project-summary.md) · [Rebuild and refresh](docs/reporting/project-summary.md)
+
+Report snapshot: 2026-10-19; independent report review pending.
+
 > Generated as an A-Team project from `ericvh/github-agentic-team-template`.
 > The `template` remote preserves the source scaffold; `origin` is
 > `git@github.com:v9fs/agent-team.git`.

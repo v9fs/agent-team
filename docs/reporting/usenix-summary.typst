@@ -1,0 +1,32 @@
+// Pandoc template. Uses built-in Typst features; no network packages.
+#set page(paper: "us-letter", margin: (x: 0.75in, y: 1in), numbering: "1")
+#set text(font: ("Times New Roman", "Liberation Serif", "Nimbus Roman"), size: 10pt,
+  top-edge: 0.8em, bottom-edge: 0.2em)
+#set par(leading: 0.2em, justify: true)
+#set heading(numbering: (..nums) => numbering("1.", ..nums.pos().filter(n => n > 0)))
+#show heading.where(level: 1): set text(size: 12pt)
+#show heading: set block(above: 1em, below: 0.5em)
+#set columns(gutter: 0.33in)
+#set table(inset: 4pt, stroke: 0.3pt)
+#show figure.where(kind: table): set figure.caption(position: top)
+#let horizontalrule = line(length: 100%)
+$if(title)$
+#align(center)[#text(size: 16pt, weight: "bold")[$title$]]
+$endif$
+$for(author)$
+#align(center)[$if(author.name)$$author.name$$else$$author$$endif$]
+$if(author.affiliation)$
+#align(center)[$author.affiliation$]
+$endif$
+$endfor$
+$if(date)$
+#align(center)[$date$]
+$endif$
+$if(abstract)$
+#block(inset: (x: 0.25in))[
+  #strong[Abstract] $abstract$
+]
+$endif$
+#columns(2)[
+$body$
+]

@@ -200,3 +200,21 @@ Before final reporting, name:
 
 The next agent must be able to resume from GitHub and checked-in evidence without
 reconstructing the previous session from chat.
+
+## Maintained Project Report
+
+Keep `docs/project-summary.md` and `docs/project-summary.pdf` as the reader entry
+point for the underlying system, design, results and limits. The state closer
+must assess refresh when architecture, scope, measured results or limitations
+change, at milestone close and before handoff to another reader. Ordinary edits
+that leave the report accurate need no rewrite.
+
+Follow [the reporting contract](docs/reporting/project-summary.md). Pin source
+and result artifacts, keep historical and unmerged evidence explicit, preserve
+distribution restrictions and state when no measured results exist. Rebuild
+with `python3 scripts/render-project-summary.py`, inspect every PDF page and
+verify receipt hashes after the final source edit. Commit source, PDF and
+receipt together. Independent review checks important claims against their
+sources under the existing review gate; report compilation does not promote
+product proof. If build, evidence or QA is incomplete, preserve the last good
+PDF and mark the report stale or unverified in README and handoff.
